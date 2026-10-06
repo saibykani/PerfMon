@@ -15,7 +15,7 @@ export async function resolveBaseline(runId: string): Promise<{ id: string; runK
   }
   const prev = await one(
     `SELECT id, run_key FROM test_runs WHERE test_id = $1 AND environment_id = $2 AND id <> $3 AND status = 'COMPLETED' AND deleted_at IS NULL
-       AND COALESCE(started_at, created_at) < COALESCE($4, $5) ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`,
+       AND COALESCE(started_at, created_at) < COALESCE($4::timestamptz, $5::timestamptz) ORDER BY COALESCE(started_at, created_at) DESC LIMIT 1`,
     [run.test_id, run.environment_id, runId, run.started_at, run.created_at]);
   return prev ? { id: prev.id, runKey: prev.run_key, reason: 'previous completed run' } : null;
 }
