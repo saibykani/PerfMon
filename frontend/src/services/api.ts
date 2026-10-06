@@ -5,6 +5,13 @@ export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string, public details?: unknown) { super(message); }
 }
 
+/**
+ * API origin. Empty = same origin (Docker/nginx or Vite dev proxy).
+ * Set VITE_API_BASE_URL (e.g. https://perfmon-api.example.com) when the UI is hosted
+ * separately (e.g. Vercel) — and add the UI origin to the backend's CORS_ORIGINS.
+ */
+export const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '').replace(/\/$/, '');
+
 const TOKEN_KEY = 'perfmon.token';
 export const tokenStore = {
   get: () => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } },
@@ -34,7 +41,7 @@ async function request<T>(method: string, path: string, body?: unknown, opts: { 
   let payload: BodyInit | undefined;
   if (body instanceof FormData) payload = body;
   else if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
-  const res = await fetch(`/api/v1${path}${qs(opts.query)}`, { method, headers, body: payload });
+  const res = await fetch(`${API_BASE}/api/v1${path}${qs(opts.query)}`, { method, headers, body: payload });
   if (res.status === 401 && !path.startsWith('/auth/login')) onUnauthorized?.();
   if (!res.ok) {
     let err: ApiErrorBody | null = null;
