@@ -86,6 +86,8 @@ export const config = {
   },
 
   seedDemoData: bool('SEED_DEMO_DATA', true),
+  /** Show the demo login on the sign-in page. Keep false for any shared/production deployment. */
+  showDemoCredentials: bool('SHOW_DEMO_CREDENTIALS', false),
   demoAdminEmail: env('DEMO_ADMIN_EMAIL', 'admin@perfmon.local')!,
   demoAdminPassword: env('DEMO_ADMIN_PASSWORD', ''),
 };

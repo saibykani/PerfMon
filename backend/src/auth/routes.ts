@@ -40,6 +40,11 @@ export async function authRoutes(app: FastifyInstance) {
     return { token, expiresAt, user: await currentUser(u.id) };
   });
 
+  r.get('/auth/config', { schema: { tags: ['Auth'], summary: 'Public sign-in configuration (demo hint when SHOW_DEMO_CREDENTIALS=true)', security: [] } }, async () => ({
+    demo: config.showDemoCredentials && config.demoAdminPassword ? { email: config.demoAdminEmail, password: config.demoAdminPassword } : null,
+    passwordResetEnabled: true,
+  }));
+
   r.post('/auth/logout', { schema: { tags: ['Auth'], summary: 'Revoke the current token' } }, async (req) => {
     const p = principalOf(req);
     const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
