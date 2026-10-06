@@ -1,0 +1,17 @@
+{
+  "name": "perfmon",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Perfmon — Performance Engineering. Observability. Intelligence.",
+  "workspaces": ["backend", "frontend", "collector"],
+  "scripts": {
+    "dev": "npm run dev --workspace backend & npm run dev --workspace frontend",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend",
+    "test": "npm run test --workspace backend && npm run test --workspace frontend",
+    "test:e2e": "npm run test:e2e --workspace frontend",
+    "migrate": "npm run migrate --workspace backend",
+    "seed": "npm run seed --workspace backend",
+    "typecheck": "npm run typecheck --workspace backend && npm run typecheck --workspace frontend"
+  },
+  "engines": { "node": ">=20" }
+}

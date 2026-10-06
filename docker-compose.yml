@@ -1,0 +1,118 @@
+# Perfmon — full stack. `docker compose up` then open http://localhost:3000
+# Optional observability extras: `docker compose --profile observability up`
+name: perfmon
+
+x-backend-env: &backend-env
+  NODE_ENV: production
+  PORT: "8080"
+  REPORT_CONTENT_PORT: "8081"
+  REPORT_CONTENT_ORIGIN: ${REPORT_CONTENT_ORIGIN:-http://localhost:8081}
+  PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+  DATABASE_URL: postgres://perfmon:${POSTGRES_PASSWORD:-perfmon}@postgres:5432/perfmon
+  TIMESERIES_DB_URL: ""
+  REDIS_URL: redis://redis:6379
+  STORAGE_DRIVER: s3
+  OBJECT_STORAGE_URL: http://minio:9000
+  OBJECT_STORAGE_BUCKET: perfmon
+  OBJECT_STORAGE_REGION: us-east-1
+  OBJECT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-perfmon}
+  OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-perfmon-secret}
+  OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+  JWT_SECRET: ${JWT_SECRET:-change-me-dev-only-jwt-secret-please-override}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-change-me-dev-only-encryption-key-32b}
+  INFLUXDB_URL: http://influxdb:8086
+  PROMETHEUS_URL: http://prometheus:9090
+  DYNATRACE_URL: ${DYNATRACE_URL:-}
+  SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+  DEMO_ADMIN_EMAIL: ${DEMO_ADMIN_EMAIL:-admin@perfmon.local}
+  DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-Perfmon@123}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-512}
+  INGEST_RATE_LIMIT_PER_SEC: ${INGEST_RATE_LIMIT_PER_SEC:-100}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: perfmon
+      POSTGRES_USER: perfmon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-perfmon}
+    ports: ["${POSTGRES_HOST_PORT:-5433}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U perfmon -d perfmon"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["${REDIS_HOST_PORT:-6380}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 20
+
+  minio:
+    image: ${MINIO_IMAGE:-pgsty/minio:latest}
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-perfmon}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-perfmon-secret}
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [miniodata:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      retries: 20
+
+  influxdb:
+    image: influxdb:2.7-alpine
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: perfmon
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_PASSWORD:-perfmon-influx}
+      DOCKER_INFLUXDB_INIT_ORG: perfmon
+      DOCKER_INFLUXDB_INIT_BUCKET: jmeter
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:-perfmon-dev-influx-token}
+    ports: ["8086:8086"]
+    volumes: [influxdata:/var/lib/influxdb2]
+
+  backend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/backend.Dockerfile
+    environment: *backend-env
+    ports: ["8080:8080", "8081:8081"]
+    volumes: [artifacts:/app/storage-data]
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      retries: 30
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/frontend.Dockerfile
+    ports: ["3000:80"]
+    depends_on: [backend]
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: [observability]
+    volumes: ["./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: [observability]
+    ports: ["3002:3000"]
+
+volumes:
+  pgdata:
+  miniodata:
+  influxdata:
+  artifacts:
