@@ -1,0 +1,51 @@
+# Render blueprint — permanent hosting for the Perfmon backend API.
+# Render dashboard → New → Blueprint → select this repo. Then put the service URL
+# (https://perfmon-api.onrender.com or your custom domain) into the `destination` of the
+# /api and /report-content rewrites in vercel.json and frontend/vercel.json.
+services:
+  - type: web
+    name: perfmon-api
+    runtime: docker
+    dockerfilePath: ./infrastructure/docker/backend.Dockerfile
+    dockerContext: .
+    plan: starter            # persistent disks require a paid instance
+    healthCheckPath: /api/v1/health
+    disk:
+      name: artifacts
+      mountPath: /app/storage-data
+      sizeGB: 10
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "8080"
+      - key: DATABASE_URL
+        fromDatabase: { name: perfmon-db, property: connectionString }
+      - key: STORAGE_DRIVER
+        value: local         # or s3 with OBJECT_STORAGE_* variables (S3 / MinIO / R2)
+      - key: LOCAL_STORAGE_PATH
+        value: /app/storage-data
+      - key: REPORT_CONTENT_ORIGIN
+        value: ""            # report content is served from the same host, CSP-sandboxed
+      - key: PUBLIC_URL
+        value: https://perf-mon.vercel.app
+      - key: CORS_ORIGINS
+        value: https://perf-mon.vercel.app
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: SEED_DEMO_DATA
+        value: "true"
+      - key: SHOW_DEMO_CREDENTIALS
+        value: "false"
+      - key: DEMO_ADMIN_EMAIL
+        value: admin@perfmon.local
+      - key: DEMO_ADMIN_PASSWORD
+        sync: false          # set in the dashboard; change after first login
+
+databases:
+  - name: perfmon-db
+    databaseName: perfmon
+    user: perfmon
+    plan: basic-256mb
