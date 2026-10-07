@@ -26,8 +26,8 @@
   --radius-sm: 4px;
   --sidebar-w: 232px;
   --topbar-h: 48px;
-  --font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font: 'Google Sans', 'Product Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'Google Sans Code', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light;
 }
 
@@ -285,6 +285,7 @@ table.table { width: 100%; border-collapse: separate; border-spacing: 0; }
 
 /* ---------- logo (app shell) ---------- */
 .logo { display: flex; align-items: center; gap: 10px; }
-.logo-word { font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; font-weight: 800; font-size: 18px; letter-spacing: -0.02em; line-height: 1; }
-.logo-word span { background: linear-gradient(135deg, #8b5cf6, #3b82f6 50%, #14b8a6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.logo-word { font-family: var(--font); font-weight: 700; font-size: 18px; letter-spacing: -0.02em; line-height: 1; }
+.logo-word span { background: linear-gradient(100deg, #7c3aed, #0284c7 55%, #65a30d); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .logo-tag { font-size: 10.5px; color: var(--text-3); margin-top: 2px; }
+:root[data-theme='dark'] .logo-word span { background-image: linear-gradient(100deg, #c4b5fd, #7dd3fc 55%, #bef264); }

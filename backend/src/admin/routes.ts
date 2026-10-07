@@ -15,7 +15,7 @@ import { storage } from '../storage/storage.js';
 import { aggregator } from '../ingest/aggregator.js';
 import { sendEmail } from '../alerts/email.js';
 
-const BCRYPT_COST = 12;
+const BCRYPT_COST = 10;
 const PASSWORD_RULE = z.string().min(8, 'Password must be at least 8 characters').max(200)
   .refine((p) => /[A-Za-z]/.test(p) && /\d/.test(p), 'Password must contain letters and digits');
 

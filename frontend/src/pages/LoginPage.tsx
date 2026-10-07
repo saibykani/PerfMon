@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode, type MutableRefObject } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, ArrowRight, CheckCircle2, Eye, EyeOff, Moon, Sun } from 'lucide-react';
+import { AlertCircle, ArrowRight, CheckCircle2, Eye, EyeOff, Heart } from 'lucide-react';
 import { useAuth } from '@/stores/auth';
-import { useUi } from '@/stores/ui';
 import { api, ApiError, API_BASE } from '@/services/api';
 import { LogoMark } from '@/components/Logo';
 import '@/styles/login.css';
@@ -23,15 +22,10 @@ function explain(err: unknown): string {
   return 'Couldn’t reach the Perfmon API. Check your connection and that the backend is running.';
 }
 
-/* ------------------------------------------------------------------ Signal: interactive wave field */
+/* ------------------------------------------------------------------ Pulse: heart-monitor trace */
 
 type Mode = 'idle' | 'busy' | 'success' | 'error';
 interface SignalCtl { pulse: () => void; mode: Mode }
-
-const PALETTE = {
-  dark: [[167, 139, 250], [96, 165, 250], [45, 212, 191], [244, 114, 182]],
-  light: [[124, 58, 237], [59, 130, 246], [13, 148, 136], [219, 39, 119]],
-};
 
 /** True when the browser renders without GPU acceleration or the device is low-end. */
 function detectLowPower() {
@@ -48,160 +42,152 @@ function detectLowPower() {
   }
 }
 
-function Signal({ ctl, theme }: { ctl: MutableRefObject<SignalCtl>; theme: 'light' | 'dark' }) {
+/** One PQRST heartbeat, u in [0,1) → offset in units of amplitude (negative = up). */
+function beat(u: number) {
+  const g = (c: number, w: number, a: number) => a * Math.exp(-((u - c) ** 2) / (2 * w * w));
+  return g(0.18, 0.025, -0.12) + g(0.3, 0.008, 0.18) + g(0.33, 0.011, -1) + g(0.365, 0.01, 0.38) + g(0.58, 0.045, -0.22);
+}
+
+/**
+ * A sweeping ECG trace (like a bedside monitor) on a cheap 1x canvas: a ring buffer of
+ * samples, a moving write head and an erase gap. Typing adds blips, signing in raises the
+ * heart rate, success turns it green, an error spikes red.
+ */
+function Pulse({ ctl, onBpm }: { ctl: MutableRefObject<SignalCtl>; onBpm: (bpm: number) => void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current!;
-    const ctx = c.getContext('2d', { alpha: true })!;
-    // Performance budget: capped resolution + frame rate, cached gradients, sprite particles.
-    const dpr = 1; // waves are soft; 1x keeps raster cost low on machines without GPU acceleration
-    const RIBBONS = 16;
-    let W = 0, H = 0, raf = 0, last = 0;
-    let gradKey = '';
-    const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999 };
-    const pal = PALETTE[theme];
-
-    // Pre-rendered glow sprites for particles (drawImage is far cheaper than per-frame radial gradients)
-    const makeSprite = (rgb: string) => {
-      const sc = document.createElement('canvas');
-      sc.width = sc.height = 24;
-      const g = sc.getContext('2d')!;
-      const rg = g.createRadialGradient(12, 12, 0, 12, 12, 12);
-      rg.addColorStop(0, `rgba(${rgb},1)`); rg.addColorStop(0.25, `rgba(${rgb},0.5)`); rg.addColorStop(1, `rgba(${rgb},0)`);
-      g.fillStyle = rg; g.fillRect(0, 0, 24, 24);
-      return sc;
-    };
-    const sprite = makeSprite(theme === 'dark' ? '220,215,255' : '99,102,241');
-    const spriteOk = makeSprite('16,185,129');
-
-    // Solid color per ribbon (cycling the palette) — far cheaper to rasterize than gradient strokes.
-    let colors: string[] = [];
-    const buildGrads = (green: number, flash: number) => {
-      const key = `${green.toFixed(1)}|${flash.toFixed(1)}`;
-      if (key === gradKey) return;
-      gradKey = key;
-      colors = [];
-      for (let i = 0; i < RIBBONS; i++) {
-        const k = i / RIBBONS;
-        const [r, gg, b] = pal[i % pal.length];
-        const alpha = (theme === 'dark' ? 0.42 : 0.34) * (0.35 + 0.65 * Math.sin(k * Math.PI)) + flash * 0.3;
-        const R = Math.round(r + (16 - r) * green + (239 - r) * flash * 0.8);
-        const G = Math.round((gg + (185 - gg) * green) * (1 - flash * 0.7));
-        const B = Math.round((b + (129 - b) * green) * (1 - flash * 0.7));
-        colors.push(`rgba(${R},${G},${B},${Math.min(1, alpha).toFixed(3)})`);
-      }
-    };
+    const ctx = c.getContext('2d')!;
+    const STEP = 3;      // px per sample
+    const SWEEP = 300;   // px per second
+    let W = 0, H = 0, N = 0, raf = 0, last = 0;
+    let ys = new Float32Array(0);
+    let head = 0, phase = 0, blip = 0, spike = 0, green = 0, bpm = 64, shownBpm = 0;
     const resize = () => {
-      W = c.clientWidth; H = c.clientHeight; top = c.getBoundingClientRect().top;
-      c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      gradKey = '';
+      W = c.clientWidth; H = c.clientHeight;
+      c.width = W; c.height = H;
+      N = Math.max(2, Math.ceil(W / STEP) + 1);
+      ys = new Float32Array(N).fill(H / 2);
+      head = 0;
     };
-    let top = 0;
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(c);
-    const onMove = (e: MouseEvent) => { mouse.tx = e.clientX; mouse.ty = e.clientY - top; };
-    const onLeave = () => { mouse.tx = -9999; mouse.ty = -9999; };
-    window.addEventListener('mousemove', onMove, { passive: true });
-    document.addEventListener('mouseleave', onLeave);
+    ctl.current.pulse = () => { blip = Math.min(1, blip + 0.5); };
 
-    const sparks = Array.from({ length: 16 }, (_, i) => ({ r: i % RIBBONS, u: Math.random(), v: 0.0008 + Math.random() * 0.0016 }));
-    let t = 0, energy = 0, amp = 1, flash = 0, speed = 1, green = 0, lastPulse = 0;
-    ctl.current.pulse = () => { energy = Math.min(1, energy + 0.22); lastPulse = performance.now(); };
+    const advance = (samples: number) => {
+      const mode = ctl.current.mode;
+      const target = mode === 'busy' ? 150 : mode === 'success' ? 58 : 64 + blip * 36;
+      bpm += (target - bpm) * 0.06;
+      green += ((mode === 'success' ? 1 : 0) - green) * 0.08;
+      if (mode === 'error' && spike < 0.05) spike = 1;
+      for (let k = 0; k < samples; k++) {
+        phase += (bpm / 60) * (STEP / SWEEP);
+        if (phase >= 1) phase -= 1;
+        const amp = H * 0.36;
+        let y = beat(phase) * amp + (Math.random() - 0.5) * (1 + blip * 6) + Math.sin(phase * 60) * blip * 5;
+        if (spike > 0.03) { y += spike * H * 0.38 * (k % 2 ? 1 : -1); spike *= 0.9; }
+        ys[head] = H * 0.5 + y;
+        head = (head + 1) % N;
+      }
+      blip *= 0.96;
+      const shown = Math.round(bpm);
+      if (shown !== shownBpm) { shownBpm = shown; onBpm(shown); }
+    };
 
-    const yAt = (i: number, x: number) => {
-      const nx = x / W;
-      const base = H * 0.52 + (i - RIBBONS / 2) * (H * 0.026);
-      const a = H * 0.22 * amp * (1 + energy * 0.9);
-      const w = Math.sin(nx * 5.2 + t * 0.9 + i * 0.22) * 0.55 + Math.sin(nx * 9.5 - t * 1.3 + i * 0.13) * 0.28 + Math.sin(nx * 2.1 + t * 0.4 - i * 0.07) * 0.5;
-      let y = base + a * w * (0.65 + 0.35 * Math.sin(i * 0.55 + t * 0.2));
-      const dx = x - mouse.x, dy = y - mouse.y;
-      if (dx * dx + dy * dy < 90000) y += 64 * Math.tanh(dy / 38) * Math.exp(-(dx * dx) / 22000) * Math.exp(-(dy * dy) / 30000) * amp;
-      return y;
+    const color = (a: number) => {
+      if (spike > 0.05) return `rgba(255,92,110,${a})`;
+      const r = Math.round(125 + (52 - 125) * green), g = Math.round(211 + (230 - 211) * green), b = Math.round(252 + (140 - 252) * green);
+      return `rgba(${r},${g},${b},${a})`;
     };
 
     const draw = () => {
-      const mode = ctl.current.mode;
-      speed += ((mode === 'busy' ? 3.2 : 1) - speed) * 0.08;
-      amp += ((mode === 'success' ? 0.02 : 1) - amp) * (mode === 'success' ? 0.09 : 0.06);
-      green += ((mode === 'success' ? 1 : 0) - green) * 0.08;
-      if (mode === 'error' && flash < 0.05) flash = 1;
-      flash *= 0.9;
-      if (flash < 0.02) flash = 0;
-      if (performance.now() - lastPulse > 120) energy *= 0.95;
-      t += 0.009 * speed;
-      mouse.x += (mouse.tx - mouse.x) * 0.18; mouse.y += (mouse.ty - mouse.y) * 0.18;
-
-      buildGrads(green, flash);
       ctx.clearRect(0, 0, W, H);
-      const step = Math.max(18, W / 64);
-      for (let i = 0; i < RIBBONS; i++) {
-        ctx.strokeStyle = colors[i];
-        ctx.lineWidth = i % 5 === 0 ? 2 : 1.1;
+      const GAP = 16;          // erased samples ahead of the write head
+      const SEG = 6;           // trail drawn in segments with decaying alpha
+      const len = N - GAP;
+      const per = Math.ceil(len / SEG);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      for (let s = 0; s < SEG; s++) {
+        ctx.strokeStyle = color(0.06 + 0.94 * ((s + 1) / SEG) ** 2);
+        ctx.lineWidth = s >= SEG - 2 ? 2.2 : 1.5;
         ctx.beginPath();
-        ctx.moveTo(-step, yAt(i, -step));
-        for (let x = 0; x <= W + step; x += step) ctx.lineTo(x, yAt(i, x));
+        let prevX = -1;
+        for (let j = s * per; j <= Math.min(len - 1, (s + 1) * per); j++) {
+          const idx = (head + GAP + j) % N;       // oldest → newest
+          const x = idx * STEP;
+          if (prevX < 0 || x < prevX) ctx.moveTo(x, ys[idx]); // wrap at the right edge
+          else ctx.lineTo(x, ys[idx]);
+          prevX = x;
+        }
         ctx.stroke();
       }
-      const spr = green > 0.5 ? spriteOk : sprite;
-      for (const s of sparks) {
-        s.u += s.v * speed * (1 + energy * 2);
-        if (s.u > 1.02) { s.u = -0.02; s.r = (Math.random() * RIBBONS) | 0; }
-        const x = s.u * W, y = yAt(s.r, x);
-        const size = 9 + energy * 6;
-        ctx.drawImage(spr, x - size / 2, y - size / 2, size, size);
-      }
+      const hi = (head - 1 + N) % N;
+      ctx.fillStyle = color(1);
+      ctx.shadowColor = color(0.9); ctx.shadowBlur = 16;
+      ctx.beginPath(); ctx.arc(hi * STEP, ys[hi], 3.4, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
     };
 
-    // Adaptive quality: software rendering (no GPU) or a struggling browser gets a low-power mode.
     let lowPower = detectLowPower();
-    let slowFrames = 0;
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
-      const idle = ctl.current.mode === 'idle' && energy < 0.02 && Math.abs(mouse.tx - mouse.x) < 1 && flash === 0;
-      const budget = lowPower ? (idle ? 125 : 60) : idle ? 80 : 33;
-      const gap = now - last;
-      if (gap < budget) return;
-      if (last && !lowPower) {
-        slowFrames = gap > budget * 2.5 ? slowFrames + 1 : Math.max(0, slowFrames - 1);
-        if (slowFrames > 12) lowPower = true;
-      }
+      if (now - last < (lowPower ? 50 : 16)) return;
+      const dt = last ? Math.min(120, now - last) : 16;
       last = now;
+      advance(Math.max(1, Math.round(((dt / 1000) * SWEEP) / STEP)));
       const t0 = performance.now();
       draw();
-      if (!lowPower && performance.now() - t0 > 12) slowFrames += 2;
+      if (!lowPower && performance.now() - t0 > 10) lowPower = true;
     };
-    if (reducedMotion()) { t = 1.3; draw(); }
+    if (reducedMotion()) { advance(N); draw(); }
     else raf = requestAnimationFrame(loop);
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener('mousemove', onMove); document.removeEventListener('mouseleave', onLeave); };
-  }, [theme, ctl]);
-  return <canvas ref={ref} className="signal" aria-hidden="true" />;
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, [ctl, onBpm]);
+  return <canvas ref={ref} className="pulse" aria-hidden="true" />;
 }
 
 /* ------------------------------------------------------------------ shell */
 
 function Shell({ children, ctl }: { children: ReactNode; ctl: MutableRefObject<SignalCtl> }) {
-  const { theme, toggleTheme } = useUi();
-  const health = useQuery({ queryKey: ['health'], queryFn: () => api.get<{ status: string }>('/health'), retry: false, refetchInterval: 30000, refetchOnWindowFocus: false });
+  const [bpm, setBpm] = useState(64);
+  const health = useQuery({
+    queryKey: ['health-timed'], retry: false, refetchInterval: 20000, refetchOnWindowFocus: false,
+    queryFn: async () => { const t0 = performance.now(); const r = await api.get<{ status: string }>('/health'); return { ...r, ms: Math.round(performance.now() - t0) }; },
+  });
   const up = health.data?.status === 'UP';
   return (
     <div className="auth">
-      <Signal ctl={ctl} theme={theme} />
-      <div className="vignette" />
-      <div className="grain" />
+      <div className="grid-bg" />
+      <div className="aurora" />
+      <Pulse ctl={ctl} onBpm={setBpm} />
+      <div className="brand-giant" aria-hidden="true">PERFMON</div>
+      <header className="top">
+        <div className="auth-brand"><LogoMark size={30} /><span>Perf<b>mon</b></span></div>
+        <div className="chips">
+          <span className="chip" title="The trace reacts as you type and sign in"><Heart size={12} className="beat" /><b className="num">{bpm}</b> bpm</span>
+          <span className={`chip ${health.isError ? 'down' : up ? 'up' : ''}`} title="Measured round-trip to the Perfmon API">
+            <i />{health.isLoading ? 'Checking API…' : up ? <>API <b className="num">{health.data!.ms} ms</b></> : 'API unreachable'}
+          </span>
+        </div>
+      </header>
       {children}
-      <div className="foot">
-        <span className={`status ${health.isError ? 'down' : ''}`} title="Perfmon API status"><i />{health.isLoading ? 'Checking API…' : up ? 'All systems operational' : 'API unreachable'}</span>
+      <footer className="foot">
+        <span>© {new Date().getFullYear()} Perfmon</span>
         <Link to="/help">Help</Link>
         <a href={`${API_BASE}/api/docs`} target="_blank" rel="noreferrer">API docs</a>
-        <button type="button" onClick={toggleTheme} aria-label="Toggle light/dark theme">{theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}{theme === 'dark' ? 'Light' : 'Dark'}</button>
-      </div>
+      </footer>
     </div>
   );
 }
 
-const Mark = () => <div className="mark"><LogoMark size={52} animated /></div>;
+const Mark = () => (
+  <div className="hero">
+    <div className="mark"><LogoMark size={60} animated /></div>
+    <div className="wordmark">Perf<span>mon</span></div>
+    <div className="tagline">Performance Engineering <i /> Observability <i /> Intelligence</div>
+  </div>
+);
 
 /* ------------------------------------------------------------------ pages */
 
@@ -240,8 +226,7 @@ export function LoginPage() {
     <Shell ctl={ctl}>
       <form className="panel" onSubmit={submit} noValidate>
         <Mark />
-        <h1 className="title">Welcome <em>back</em></h1>
-        <p className="lede">Sign in to Perfmon — performance engineering, observability and intelligence.</p>
+        <h1 className="title">Sign in to your workspace</h1>
         {error && <div key={errKey} className="msg" role="alert"><AlertCircle size={16} />{error}</div>}
         <div className="inputs">
           <div className={`fx ${error ? 'err' : ''}`}>
@@ -281,7 +266,7 @@ export function ForgotPasswordPage() {
     <Shell ctl={ctl}>
       <form className="panel" onSubmit={async (e) => { e.preventDefault(); setBusy(true); ctl.current.mode = 'busy'; await api.post('/auth/forgot-password', { email }).catch(() => undefined); setBusy(false); ctl.current.mode = 'success'; setSent(true); }}>
         <Mark />
-        <h1 className="title">Reset <em>password</em></h1>
+        <h1 className="title">Reset your password</h1>
         <p className="lede">We’ll email you a secure link to choose a new one.</p>
         {sent ? <div className="msg okmsg"><CheckCircle2 size={16} />If an account exists for that email, a reset link is on its way (valid 30 minutes).</div> : (
           <>
@@ -311,7 +296,7 @@ export function ResetPasswordPage() {
         catch (err) { ctl.current.mode = 'error'; setTimeout(() => (ctl.current.mode = 'idle'), 500); setMsg({ ok: false, text: explain(err) }); }
       }}>
         <Mark />
-        <h1 className="title">New <em>password</em></h1>
+        <h1 className="title">Choose a new password</h1>
         <p className="lede">8+ characters with letters and numbers.</p>
         {msg && <div className={`msg ${msg.ok ? 'okmsg' : ''}`}>{msg.ok ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}{msg.text}</div>}
         <div className="inputs">

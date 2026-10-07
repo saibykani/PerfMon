@@ -41,6 +41,7 @@ const ReleasesPage = page(() => import('@/pages/ReleasesPage'), 'ReleasesPage');
 const IntegrationsPage = page(() => import('@/pages/IntegrationsPage'), 'IntegrationsPage');
 const AdminPage = page(() => import('@/pages/admin/AdminPage'), 'AdminPage');
 const HelpPage = page(() => import('@/pages/HelpPage'), 'HelpPage');
+const SystemMonitorPage = page(() => import('@/pages/SystemMonitorPage'), 'SystemMonitorPage');
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
@@ -82,6 +83,7 @@ export function App() {
         <Route path="infrastructure" element={<S><InfrastructurePage /></S>} />
         <Route path="app-monitoring" element={<S><AppMonitoringPage /></S>} />
         <Route path="databases" element={<S><DatabasesPage /></S>} />
+        <Route path="system" element={<S><SystemMonitorPage /></S>} />
         <Route path="events" element={<S><EventsPage /></S>} />
         <Route path="sla" element={<S><SlaPage /></S>} />
         <Route path="alerts" element={<S><AlertsPage /></S>} />

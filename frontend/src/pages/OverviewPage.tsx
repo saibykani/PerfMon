@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Activity, AlertTriangle, ArrowRight, Bell, CheckCircle2, Cpu, Gauge, Info, LayoutDashboard, Play, ServerCog, Timer, TrendingUp, XCircle,
+  Activity, AlertTriangle, ArrowRight, Bell, CheckCircle2, Cpu, FileText, FlaskConical, Gauge, GitCompare, Info, LayoutDashboard, MonitorCog, Play, Radio, ServerCog, Timer, TrendingUp, XCircle,
 } from 'lucide-react';
 import { api } from '@/services/api';
 import { useFilters, resolveRange, rangeLabel } from '@/stores/filters';
@@ -95,6 +95,49 @@ function Health({ d }: { d: OverviewData }) {
         <div className="ov-health-facts">{facts.length ? facts.reduce<ReactNode[]>((acc, f, i) => (i ? [...acc, <span key={`s${i}`} className="dotsep">•</span>, f] : [f]), []) : 'Start a run to see performance health here.'}</div>
       </div>
     </div>
+  );
+}
+
+const greeting = () => { const h = new Date().getHours(); return h < 5 ? 'Working late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; };
+
+interface HostMini { current: { cpu: number; memPct: number } | null; disks: { mount: string; pct: number }[]; host: { hostname: string } }
+
+/** Friendly hero: greeting, quick actions and a live pulse of the machine running Perfmon. */
+function Welcome({ name, sub }: { name?: string; sub: ReactNode }) {
+  const host = useQuery({ queryKey: ['system-host-mini'], queryFn: () => api.get<HostMini>('/system/host'), refetchInterval: 5000, retry: false });
+  const c = host.data?.current;
+  const disk = host.data?.disks.slice().sort((a, b) => b.pct - a.pct)[0];
+  const meter = (label: string, v: number | null | undefined) => (
+    <div className="ov-meter" title={`${label}: ${v == null ? 'collecting' : `${Math.round(v)}%`}`}>
+      <span>{label}</span>
+      <i className={v == null ? '' : v >= 90 ? 'bad' : v >= 75 ? 'warn' : 'good'}><b style={{ width: `${v ?? 0}%` }} /></i>
+      <em className="num">{v == null ? '—' : `${Math.round(v)}%`}</em>
+    </div>
+  );
+  return (
+    <section className="ov-hero">
+      <div className="ov-hero-main">
+        <div className="ov-hello">{greeting()}{name ? `, ${name.split(' ')[0]}` : ''} <span className="wave" aria-hidden="true">👋</span></div>
+        <h1>Here’s how your systems are performing</h1>
+        <div className="ov-hero-sub">{sub}</div>
+        <div className="ov-quick">
+          <Link to="/tests"><FlaskConical size={14} />New test</Link>
+          <Link to="/runs"><Play size={14} />Test runs</Link>
+          <Link to="/live"><Radio size={14} />Live monitoring</Link>
+          <Link to="/compare"><GitCompare size={14} />Compare runs</Link>
+          <Link to="/dashboards"><LayoutDashboard size={14} />Dashboards</Link>
+          <Link to="/reports"><FileText size={14} />Reports</Link>
+        </div>
+      </div>
+      <Link to="/system" className="ov-host" aria-label="Open System Monitor">
+        <div className="ov-host-head"><MonitorCog size={14} /><span>This machine</span>{c && <em className="ov-host-live"><i />live</em>}</div>
+        <div className="ov-host-name">{host.data?.host.hostname ?? (host.isError ? 'Unavailable' : 'Connecting…')}</div>
+        {meter('CPU', c?.cpu)}
+        {meter('Memory', c?.memPct)}
+        {meter(disk ? `Disk ${disk.mount}` : 'Disk', disk?.pct)}
+        <div className="ov-host-foot">Open System Monitor <ArrowRight size={12} /></div>
+      </Link>
+    </section>
   );
 }
 
@@ -253,16 +296,7 @@ export function OverviewPage() {
 
   return (
     <div className="ov">
-      <div className="ov-head">
-        <div>
-          <h1>Performance Overview</h1>
-          <div className="sub muted">{rangeLabel(f.timeRange)} · tailored for <b>{view.replace(/_/g, ' ').toLowerCase()}</b> — {layout.note}</div>
-        </div>
-        <div className="row">
-          <Link className="btn" to="/dashboards"><LayoutDashboard size={14} />Dashboards</Link>
-          <Link className="btn btn-primary" to="/runs"><Play size={14} />Runs</Link>
-        </div>
-      </div>
+      <Welcome name={user?.name} sub={<>{rangeLabel(f.timeRange)} · tailored for <b>{view.replace(/_/g, ' ').toLowerCase()}</b> — {layout.note}</>} />
       <GlobalFilterBar show={['project', 'application', 'environment', 'run', 'time', 'refresh']} />
       {f.runId && (
         <div className="ov-focus">

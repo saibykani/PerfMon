@@ -29,7 +29,7 @@ export function baseOption(theme: 'light' | 'dark'): EChartsOption {
   return {
     color: CATEGORICAL[theme],
     backgroundColor: 'transparent',
-    textStyle: { fontFamily: 'Inter, system-ui, sans-serif', color: c.ink2, fontSize: 11 },
+    textStyle: { fontFamily: "'Google Sans', system-ui, sans-serif", color: c.ink2, fontSize: 11 },
     animationDuration: 300,
     grid: { left: 8, right: 16, top: 30, bottom: 8, containLabel: true },
     legend: { top: 0, left: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 3, textStyle: { color: c.ink2, fontSize: 11 }, inactiveColor: c.axis },

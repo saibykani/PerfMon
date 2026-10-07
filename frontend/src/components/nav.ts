@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, FolderKanban, Boxes, FlaskConical, PlayCircle, LayoutGrid, Radio, ArrowLeftRight, Network, Server, Activity,
-  Database, ShieldCheck, Bell, Lightbulb, TrendingDown, GitCompare, LineChart, Gauge, FileText, Paperclip, Tag, Plug, Settings, BookOpen, CalendarClock,
+  Database, MonitorCog, ShieldCheck, Bell, Lightbulb, TrendingDown, GitCompare, LineChart, Gauge, FileText, Paperclip, Tag, Plug, Settings, BookOpen, CalendarClock,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -15,6 +15,7 @@ export const NAV: NavItem[] = [
   { to: '/runs', label: 'Test Runs', icon: PlayCircle, section: 'Testing' },
   { to: '/dashboards', label: 'Dashboards', icon: LayoutGrid, section: 'Observability' },
   { to: '/live', label: 'Live Monitoring', icon: Radio, section: 'Observability' },
+  { to: '/system', label: 'System Monitor', icon: MonitorCog, section: 'Observability' },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight, section: 'Observability' },
   { to: '/apis', label: 'APIs', icon: Network, section: 'Observability' },
   { to: '/infrastructure', label: 'Infrastructure', icon: Server, section: 'Observability' },
