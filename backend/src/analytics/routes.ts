@@ -160,8 +160,10 @@ export async function analyticsRoutes(app: FastifyInstance) {
     if (!q.testId && !q.environmentId) throw badRequest('Provide testId and/or environmentId');
     const projectId = await projectFilter(req, q.projectId);
     if (q.testId) await assertTest(p.orgId, q.testId);
-    const { fit: _fit, slaP95: _sla, ...res } = await capacityModel({ orgId: p.orgId, projectId, testId: q.testId, environmentId: q.environmentId });
-    return res;
+    const { fit, slaP95, ...res } = await capacityModel({ orgId: p.orgId, projectId, testId: q.testId, environmentId: q.environmentId });
+    // Fitted coefficients (P95 = a + b·TPS, or e^(a + b·TPS)) so clients can draw the curve; still an estimate.
+    const fitParams = fit ? { type: fit.type, a: fit.a, b: fit.b, r2: fit.r2, n: fit.n, minTps: fit.minTps, maxTps: fit.maxTps } : null;
+    return { ...res, fit: fitParams, slaP95 };
   });
 
   r.post('/capacity/project', {

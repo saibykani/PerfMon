@@ -1,8 +1,8 @@
 /* ================= System Monitor ================= */
 .sys-page { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .sys-hero { display: flex; gap: 14px; align-items: center; padding: 16px 18px; border-radius: 14px; border: 1px solid var(--border); position: relative; overflow: hidden;
-  background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 55%), radial-gradient(100% 140% at 100% 100%, color-mix(in srgb, #e09a88 12%, transparent), transparent 60%), var(--surface); }
-.sys-hero-ico { width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center; flex: none; color: #2a1410; background: var(--brand-grad); box-shadow: 0 8px 22px -10px #c47767; }
+  background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 55%), radial-gradient(100% 140% at 100% 100%, color-mix(in srgb, var(--text) 5%, transparent), transparent 60%), var(--surface); }
+.sys-hero-ico { width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center; flex: none; color: var(--on-accent); background: var(--brand-grad); box-shadow: 0 8px 22px -12px rgba(0,0,0,.6); }
 .sys-hero-main { min-width: 0; flex: 1; }
 .sys-hero-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .sys-hero h1 { font-size: 21px; letter-spacing: -0.02em; }

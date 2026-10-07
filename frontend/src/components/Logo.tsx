@@ -1,7 +1,8 @@
 import { useId } from 'react';
 
 /**
- * Perfmon brand mark (rose-gold "P": ascending bars form the stem, a folded ribbon forms the bowl).
+ * Perfmon brand mark ("P": ascending bars form the stem, a folded ribbon forms the bowl).
+ * Colours follow the theme (--logo-* variables): white→silver on dark, graphite on light.
  * Source artwork: /brand/perfmon-logo-original.png · vector: /brand/perfmon-mark.svg.
  * `animated` grows the bars and sweeps a light across the ribbon.
  */
@@ -11,13 +12,13 @@ export function LogoMark({ size = 28, animated = false }: { size?: number; anima
     <svg width={size} height={size} viewBox="28.5 9 320 320" aria-hidden="true" className={animated ? 'logo-anim' : undefined}>
       <defs>
         <linearGradient id={`b${id}`} x1="90" y1="28" x2="330" y2="250" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#fde6da" /><stop offset=".3" stopColor="#f0b9a6" /><stop offset=".65" stopColor="#dc907e" /><stop offset="1" stopColor="#f3c7b6" />
+          <stop offset="0" style={{ stopColor: 'var(--logo-hi)' }} /><stop offset=".55" style={{ stopColor: 'var(--logo-mid)' }} /><stop offset="1" style={{ stopColor: 'var(--logo-lo)' }} />
         </linearGradient>
         <linearGradient id={`f${id}`} x1="262" y1="95" x2="330" y2="210" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#8f4a43" stopOpacity=".6" /><stop offset=".6" stopColor="#8f4a43" stopOpacity=".15" /><stop offset="1" stopColor="#8f4a43" stopOpacity="0" />
+          <stop offset="0" style={{ stopColor: 'var(--logo-fold)', stopOpacity: 0.55 }} /><stop offset=".6" style={{ stopColor: 'var(--logo-fold)', stopOpacity: 0.15 }} /><stop offset="1" style={{ stopColor: 'var(--logo-fold)', stopOpacity: 0 }} />
         </linearGradient>
         <linearGradient id={`v${id}`} x1="0" y1="130" x2="0" y2="310" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#f6cbbb" /><stop offset=".5" stopColor="#e5a08e" /><stop offset="1" stopColor="#cf8576" />
+          <stop offset="0" style={{ stopColor: 'var(--logo-hi)' }} /><stop offset="1" style={{ stopColor: 'var(--logo-lo)' }} />
         </linearGradient>
         <linearGradient id={`s${id}`} x1="0" y1="0" x2="1" y2="0">
           <stop offset="0" stopColor="#fff" stopOpacity="0" /><stop offset=".5" stopColor="#fff" stopOpacity=".55" /><stop offset="1" stopColor="#fff" stopOpacity="0" />

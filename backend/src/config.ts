@@ -44,7 +44,7 @@ export const config = {
   redisUrl: env('REDIS_URL', ''),
 
   storage: {
-    driver: (env('STORAGE_DRIVER', 'local') as 'local' | 's3' | 'azure'),
+    driver: (env('STORAGE_DRIVER', 'local') as 'local' | 's3' | 'azure' | 'postgres'),
     localPath: env('LOCAL_STORAGE_PATH', './storage-data')!,
     s3: {
       endpoint: env('OBJECT_STORAGE_URL', ''),

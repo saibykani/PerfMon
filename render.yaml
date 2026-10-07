@@ -1,30 +1,34 @@
-# Render blueprint — permanent hosting for the Perfmon backend API.
-# Render dashboard → New → Blueprint → select this repo. Then put the service URL
-# (https://perfmon-api.onrender.com or your custom domain) into the `destination` of the
-# /api and /report-content rewrites in vercel.json and frontend/vercel.json.
+# Render blueprint — 24/7 hosting for the Perfmon backend API (Render free web service + Neon free PostgreSQL).
+#
+# 1. Create a Neon project (https://neon.tech, region close to you, e.g. AWS Asia Pacific (Singapore)) and copy the
+#    DIRECT connection string (NOT the "-pooler" host — the job queue uses LISTEN/NOTIFY), e.g.
+#    postgresql://user:pass@ep-xxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+# 2. Render dashboard → New → Blueprint → select this repo → fill in DATABASE_URL and DEMO_ADMIN_PASSWORD → Apply.
+# 3. Put the service URL (https://perfmon-api.onrender.com or the name Render assigns) into the /api and
+#    /report-content rewrites of vercel.json and frontend/vercel.json, and into .github/workflows/keepalive.yml.
+#
+# Free-tier notes: the service sleeps after ~15 minutes without traffic; .github/workflows/keepalive.yml pings it
+# every 10 minutes so it stays awake. There is no persistent disk, so uploads are stored in PostgreSQL
+# (STORAGE_DRIVER=postgres; Neon free = 0.5 GB). Upgrade `plan` to starter and use S3/R2 storage for heavier use.
 services:
   - type: web
     name: perfmon-api
     runtime: docker
+    plan: free
+    region: singapore
     dockerfilePath: ./infrastructure/docker/backend.Dockerfile
     dockerContext: .
-    plan: starter            # persistent disks require a paid instance
     healthCheckPath: /api/v1/health
-    disk:
-      name: artifacts
-      mountPath: /app/storage-data
-      sizeGB: 10
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: "8080"
       - key: DATABASE_URL
-        fromDatabase: { name: perfmon-db, property: connectionString }
+        sync: false          # Neon direct connection string (sslmode=require)
       - key: STORAGE_DRIVER
-        value: local         # or s3 with OBJECT_STORAGE_* variables (S3 / MinIO / R2)
-      - key: LOCAL_STORAGE_PATH
-        value: /app/storage-data
+        value: postgres
+      - key: MAX_UPLOAD_MB
+        value: "50"
       - key: REPORT_CONTENT_ORIGIN
         value: ""            # report content is served from the same host, CSP-sandboxed
       - key: PUBLIC_URL
@@ -36,16 +40,10 @@ services:
       - key: ENCRYPTION_KEY
         generateValue: true
       - key: SEED_DEMO_DATA
-        value: "true"
+        value: "false"
       - key: SHOW_DEMO_CREDENTIALS
         value: "false"
       - key: DEMO_ADMIN_EMAIL
         value: admin@perfmon.local
       - key: DEMO_ADMIN_PASSWORD
-        sync: false          # set in the dashboard; change after first login
-
-databases:
-  - name: perfmon-db
-    databaseName: perfmon
-    user: perfmon
-    plan: basic-256mb
+        sync: false          # initial administrator password (only used when the database has no users)

@@ -8,6 +8,7 @@ import {
   ListObjectsV2Command, DeleteObjectsCommand, HeadBucketCommand, CreateBucketCommand,
 } from '@aws-sdk/client-s3';
 import { config } from '../config.js';
+import { pool } from '../db/pool.js';
 
 export interface StorageDriver {
   readonly name: string;
@@ -189,8 +190,88 @@ class AzureStorage implements StorageDriver {
   }
 }
 
+/**
+ * Objects stored in PostgreSQL (tables object_blobs / object_blob_chunks), for hosts without a
+ * persistent disk. Writes stream in CHUNK-sized pieces; reads stream chunk by chunk.
+ * Suited to modest volumes — prefer S3-compatible storage for large report archives.
+ */
+class PostgresStorage implements StorageDriver {
+  readonly name = 'postgres';
+  private static CHUNK = 4 * 1024 * 1024;
+  async init() { /* tables come from migration 010_object_storage.sql */ }
+  async put(key: string, body: Buffer | Readable, contentType?: string) {
+    assertSafeKey(key);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`DELETE FROM object_blobs WHERE key = $1`, [key]);
+      await client.query(`INSERT INTO object_blobs (key, content_type) VALUES ($1, $2)`, [key, contentType ?? null]);
+      let idx = 0;
+      let size = 0;
+      let pending: Buffer[] = [];
+      let pendingLen = 0;
+      const flush = async (all: boolean) => {
+        while (pendingLen >= PostgresStorage.CHUNK || (all && pendingLen > 0)) {
+          const buf = Buffer.concat(pending, pendingLen);
+          const part = buf.subarray(0, Math.min(PostgresStorage.CHUNK, buf.length));
+          const rest = buf.subarray(part.length);
+          await client.query(`INSERT INTO object_blob_chunks (key, idx, data) VALUES ($1, $2, $3)`, [key, idx++, part]);
+          pending = rest.length ? [rest] : [];
+          pendingLen = rest.length;
+        }
+      };
+      const source: AsyncIterable<Buffer> | Iterable<Buffer> = Buffer.isBuffer(body) ? [body] : body;
+      for await (const c of source) {
+        const b = Buffer.isBuffer(c) ? c : Buffer.from(c);
+        pending.push(b); pendingLen += b.length; size += b.length;
+        await flush(false);
+      }
+      await flush(true);
+      await client.query(`UPDATE object_blobs SET size = $2, chunks = $3 WHERE key = $1`, [key, size, idx]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw e;
+    } finally { client.release(); }
+  }
+  async get(key: string) {
+    assertSafeKey(key);
+    const meta = await pool.query(`SELECT chunks FROM object_blobs WHERE key = $1`, [key]);
+    if (!meta.rows.length) throw Object.assign(new Error('not found'), { code: 'NoSuchKey' });
+    const chunks = Number(meta.rows[0].chunks);
+    return Readable.from((async function* () {
+      for (let i = 0; i < chunks; i++) {
+        const r = await pool.query(`SELECT data FROM object_blob_chunks WHERE key = $1 AND idx = $2`, [key, i]);
+        if (r.rows[0]) yield r.rows[0].data as Buffer;
+      }
+    })());
+  }
+  async getBuffer(key: string) { return streamToBuffer(await this.get(key)); }
+  async head(key: string) {
+    assertSafeKey(key);
+    const r = await pool.query(`SELECT size FROM object_blobs WHERE key = $1`, [key]);
+    return r.rows.length ? { size: Number(r.rows[0].size) } : null;
+  }
+  async delete(key: string) { assertSafeKey(key); await pool.query(`DELETE FROM object_blobs WHERE key = $1`, [key]); }
+  async deletePrefix(prefix: string) {
+    const r = await pool.query(`DELETE FROM object_blobs WHERE starts_with(key, $1)`, [prefix]);
+    return r.rowCount ?? 0;
+  }
+  async list(prefix: string) {
+    const r = await pool.query(`SELECT key FROM object_blobs WHERE starts_with(key, $1) ORDER BY key`, [prefix]);
+    return r.rows.map((x) => x.key as string);
+  }
+  async health() {
+    try {
+      const r = await pool.query(`SELECT count(*)::int n, coalesce(sum(size), 0)::bigint bytes FROM object_blobs`);
+      return { ok: true, detail: `postgres: ${r.rows[0].n} objects, ${(Number(r.rows[0].bytes) / 1048576).toFixed(1)} MB` };
+    } catch (e) { return { ok: false, detail: (e as Error).message }; }
+  }
+}
+
 function createDriver(): StorageDriver {
   switch (config.storage.driver) {
+    case 'postgres': return new PostgresStorage();
     case 's3': return new S3Storage();
     case 'azure': return new AzureStorage();
     default: return new LocalStorage();

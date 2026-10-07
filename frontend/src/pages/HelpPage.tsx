@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import {
-  ArrowLeft, ArrowRight, BookOpen, Cpu, Database, Download, ExternalLink, FileCode2, FlaskConical, KeyRound, Rocket, Search, Server, X,
+  ArrowLeft, ArrowRight, BookOpen, Cloud, Cpu, Database, Download, ExternalLink, FileCode2, FlaskConical, KeyRound, Rocket, Search, Server, X,
 } from 'lucide-react';
 import { API_BASE } from '@/services/api';
 import '@/styles/help.css';
@@ -60,6 +60,7 @@ const GUIDES = [
   { slug: 'influxdb-setup', icon: Database, blurb: 'Two listeners, or import JMeter results from your InfluxDB.' },
   { slug: 'server-monitoring', icon: Cpu, blurb: 'Collector on app servers and the System Monitor.' },
   { slug: 'users-and-api-keys', icon: KeyRound, blurb: 'Invite users, roles, API keys for JMeter and CI.' },
+  { slug: 'deploy-24x7', icon: Cloud, blurb: 'Host the backend and database in the cloud, always on.' },
 ];
 
 /* ------------------------------------------------------------------ rendering */
@@ -221,6 +222,20 @@ function Home() {
             );
           })}
         </div>
+
+        <section className="help-key">
+          <KeyRound size={20} />
+          <div>
+            <b>How do I get a Perfmon API key?</b>
+            <ol>
+              <li>Sign in as an administrator (or a Performance Engineer) and open <Link to="/admin/api-keys">Platform → Administration → API keys</Link>.</li>
+              <li>Click <b>Create key</b>, give it a name (e.g. <i>JMeter load generators</i>), tick scope <b>ingest</b> and, ideally, pick the project.</li>
+              <li>Copy the key (<span className="mono">pmk_xxxxxxxx_…</span>) right away — it is shown <b>only once</b>. Lost it? Use <b>Rotate</b> to get a new one.</li>
+              <li>Use it as <span className="mono">-Jperfmon.token=pmk_…</span> in JMeter, <span className="mono">PERFMON_API_KEY</span> in scripts and the Collector, or <span className="mono">Authorization: Bearer pmk_…</span> for the API.</li>
+            </ol>
+            <Link to="/help/users-and-api-keys#api-keys">More about API keys <ArrowRight size={12} /></Link>
+          </div>
+        </section>
 
         <h2 className="help-h">Downloads</h2>
         <div className="help-downloads">

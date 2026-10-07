@@ -1,0 +1,9 @@
+/* Applications Monitoring — colours come only from theme variables. */
+.apm-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.apm-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; align-items: start; }
+.apm-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .apm-split, .apm-grid-2 { grid-template-columns: minmax(0, 1fr); } }
+.apm-deps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.apm-dep { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); font-size: 12px; }
+.apm-page .grid.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .apm-page .grid.g2 { grid-template-columns: minmax(0, 1fr); } }

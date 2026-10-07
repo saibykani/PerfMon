@@ -6,6 +6,7 @@ import { NAV } from './nav';
 import { Logo } from './Logo';
 import { CommandPalette } from './CommandPalette';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
+import { WakingBanner } from './WakingBanner';
 import { useAuth } from '@/stores/auth';
 import { useUi } from '@/stores/ui';
 import { api } from '@/services/api';
@@ -102,6 +103,7 @@ export function Layout() {
           </button>
         </header>
         <main className="content">
+          <WakingBanner />
           <Outlet />
         </main>
       </div>

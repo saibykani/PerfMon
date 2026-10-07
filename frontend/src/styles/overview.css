@@ -144,7 +144,7 @@
 
 /* ---------- welcome hero ---------- */
 .ov-hero { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; padding: 20px 22px; margin-bottom: 12px; border-radius: 16px; border: 1px solid var(--border); position: relative; overflow: hidden;
-  background: radial-gradient(90% 160% at 0% 0%, color-mix(in srgb, #e09a88 16%, transparent), transparent 55%), radial-gradient(70% 140% at 85% 120%, color-mix(in srgb, #c47767 10%, transparent), transparent 60%), var(--surface); }
+  background: radial-gradient(90% 160% at 0% 0%, color-mix(in srgb, var(--text) 6%, transparent), transparent 55%), radial-gradient(70% 140% at 85% 120%, color-mix(in srgb, var(--text) 4%, transparent), transparent 60%), var(--surface); }
 .ov-hero::after { content: ''; position: absolute; right: -60px; top: -60px; width: 220px; height: 220px; border-radius: 50%; border: 1px dashed color-mix(in srgb, var(--accent) 25%, transparent); pointer-events: none; animation: ov-spin 60s linear infinite; }
 @keyframes ov-spin { to { transform: rotate(360deg); } }
 @media (max-width: 1000px) { .ov-hero { grid-template-columns: 1fr; } }

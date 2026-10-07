@@ -1,0 +1,24 @@
+# Keeps the Render free web service awake (it sleeps after ~15 minutes without traffic).
+# Set the repository variable PERFMON_API_URL (Settings → Secrets and variables → Actions → Variables)
+# if your Render service URL differs from the default below.
+name: keepalive
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping Perfmon API
+        env:
+          URL: ${{ vars.PERFMON_API_URL || 'https://perfmon-api.onrender.com' }}
+        run: |
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$URL/api/v1/health" || true)
+            echo "attempt $i: HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 20
+          done
+          echo "::warning::Perfmon API did not answer 200 at $URL"

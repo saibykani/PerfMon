@@ -34,7 +34,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
     contentSecurityPolicy: false, // API responses are JSON; the SPA sets its own CSP via nginx
     crossOriginResourcePolicy: { policy: 'same-site' },
   });
-  await app.register(cors, { origin: config.corsOrigins, credentials: false, exposedHeaders: ['content-disposition', 'x-checksum-sha256'] });
+  await app.register(cors, { origin: config.corsOrigins, credentials: false, methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'], exposedHeaders: ['content-disposition', 'x-checksum-sha256'] });
   await app.register(rateLimit, {
     global: true, max: config.apiRateLimitPerMin, timeWindow: '1 minute',
     keyGenerator: (req) => (req.headers.authorization ?? req.headers['x-api-key'] ?? req.ip) as string,

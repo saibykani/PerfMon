@@ -34,7 +34,38 @@ export function qs(q?: Query) {
   return s ? `?${s}` : '';
 }
 
-async function request<T>(method: string, path: string, body?: unknown, opts: { query?: Query; raw?: boolean } = {}): Promise<T> {
+/* ---------- waking up a sleeping / restarting backend ----------
+ * Free hosting tiers stop the API after a quiet period and take up to a minute to start again.
+ * Instead of failing, requests wait for /health to answer and are then retried once, while the
+ * UI shows a "waking up" notice (subscribe with onApiWaking).
+ */
+const wakeListeners = new Set<(waking: boolean) => void>();
+export const onApiWaking = (fn: (waking: boolean) => void) => { wakeListeners.add(fn); return () => { wakeListeners.delete(fn); }; };
+let waking: Promise<boolean> | null = null;
+const WAKE_MAX_MS = 150_000;
+
+/** Resolves true once the API answers /health (polling for up to ~2.5 minutes). */
+export function waitForApi(): Promise<boolean> {
+  if (!waking) {
+    wakeListeners.forEach((f) => f(true));
+    waking = (async () => {
+      const start = Date.now();
+      while (Date.now() - start < WAKE_MAX_MS) {
+        try {
+          const r = await fetch(`${API_BASE}/api/v1/health`, { signal: AbortSignal.timeout(20_000), cache: 'no-store' });
+          if (r.ok) return true;
+        } catch { /* still starting */ }
+        await new Promise((r) => setTimeout(r, 3_000));
+      }
+      return false;
+    })().finally(() => { waking = null; wakeListeners.forEach((f) => f(false)); });
+  }
+  return waking;
+}
+
+const UNAVAILABLE = 'The Perfmon server is not responding right now. It was given 2½ minutes to start — please try again shortly.';
+
+async function request<T>(method: string, path: string, body?: unknown, opts: { query?: Query; raw?: boolean; retried?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = {};
   const token = tokenStore.get();
   if (token) headers.authorization = `Bearer ${token}`;
@@ -45,15 +76,25 @@ async function request<T>(method: string, path: string, body?: unknown, opts: { 
   const ctrl = new AbortController();
   const timeoutMs = body instanceof FormData ? 10 * 60_000 : opts.raw ? 120_000 : path === '/health' ? 6_000 : 25_000;
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  // Safe to repeat after the server comes back: reads, sign-in, and anything the server never received.
+  const idempotent = method === 'GET' || path === '/auth/login';
+  const retry = async (reachedServer: boolean): Promise<T> => {
+    if (opts.retried || body instanceof FormData || (reachedServer && !idempotent)) throw new ApiError(503, 'UNAVAILABLE', UNAVAILABLE);
+    if (!(await waitForApi())) throw new ApiError(503, 'UNAVAILABLE', UNAVAILABLE);
+    return request<T>(method, path, body, { ...opts, retried: true });
+  };
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/api/v1${path}${qs(opts.query)}`, { method, headers, body: payload, signal: ctrl.signal });
   } catch (e) {
-    if ((e as Error).name === 'AbortError') throw new ApiError(504, 'TIMEOUT', `The Perfmon API did not respond within ${Math.round(timeoutMs / 1000)}s. The backend may be down or overloaded.`);
-    throw e;
+    clearTimeout(timer);
+    // network error = request never reached the API; timeout = it may have
+    return retry((e as Error).name === 'AbortError');
   } finally {
     clearTimeout(timer);
   }
+  // 502/503/504 come from the proxy or the host while the API is starting — the API did not process the request
+  if ((res.status === 502 || res.status === 503 || res.status === 504) && !res.headers.get('content-type')?.includes('application/json')) return retry(false);
   if (res.status === 401 && !path.startsWith('/auth/login')) onUnauthorized?.();
   if (!res.ok) {
     let err: ApiErrorBody | null = null;
