@@ -6,11 +6,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://yourself-obvious-webmasters-framing.trycloudflare.com/api/:path*"
+      "destination": "https://apollo-cluster-martha-valentine.trycloudflare.com/api/:path*"
     },
     {
       "source": "/report-content/:path*",
-      "destination": "https://yourself-obvious-webmasters-framing.trycloudflare.com/report-content/:path*"
+      "destination": "https://apollo-cluster-martha-valentine.trycloudflare.com/report-content/:path*"
     },
     {
       "source": "/((?!assets/|favicon.svg|logo.svg).*)",
