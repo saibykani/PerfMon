@@ -271,7 +271,7 @@ export async function renderXlsx(c: ReportContent): Promise<Buffer> {
 /* ------------------------------------------------------------------ PDF */
 
 /** Standard PDF fonts are WinAnsi: replace characters they cannot encode. */
-const pdfText = (v: unknown) => String(v ?? '').replace(/→/g, '->').replace(/≈/g, '~').replace(/Δ/g, 'd').replace(/∞/g, 'inf').replace(/≤/g, '<=').replace(/≥/g, '>=').replace(/[^\x09\x0a\x0d\x20-\x7e\xa0-\xff–—‘’“”•…€]/g, '?');
+const pdfText = (v: unknown) => String(v ?? '').replace(/→/g, '->').replace(/≈/g, '~').replace(/Δ/g, 'Chg').replace(/∞/g, 'inf').replace(/≤/g, '<=').replace(/≥/g, '>=').replace(/[^\x09\x0a\x0d\x20-\x7e\xa0-\xff–—‘’“”•…€]/g, '?');
 
 export function renderPdf(c: ReportContent): Promise<Buffer> {
   return new Promise((resolve, reject) => {
