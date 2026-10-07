@@ -62,6 +62,9 @@ export const config = {
 
   jwtSecret: env('JWT_SECRET', '')!,
   jwtExpiresIn: env('JWT_EXPIRES_IN', '12h')!,
+  jwtRememberExpiresIn: env('JWT_REMEMBER_EXPIRES_IN', '30d')!,
+  /** OAuth client ID for "Continue with Google" (empty = Google sign-in hidden). */
+  googleClientId: env('GOOGLE_CLIENT_ID', ''),
   encryptionKey: env('ENCRYPTION_KEY', '')!,
   maxUploadBytes: int('MAX_UPLOAD_MB', 512) * 1024 * 1024,
   ingestRateLimitPerSec: int('INGEST_RATE_LIMIT_PER_SEC', 100),

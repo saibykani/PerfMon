@@ -18,7 +18,7 @@ import { artifactRoutes, reportContentRoutes } from './artifacts/routes.js';
 import { optionalRoutes } from './routes-registry.js';
 
 // Routes that do not require authentication
-const PUBLIC = [/^\/api\/v1\/auth\/(login|forgot-password|reset-password|config)$/, /^\/api\/v1\/health/, /^\/api\/docs/, /^\/metrics$/, /^\/report-content\//];
+const PUBLIC = [/^\/api\/v1\/auth\/(login|google|forgot-password|reset-password|config)$/, /^\/api\/v1\/health/, /^\/api\/docs/, /^\/metrics$/, /^\/report-content\//];
 
 export async function buildApp(opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({

@@ -18,9 +18,9 @@ export async function authRoutes(app: FastifyInstance) {
 
   r.post('/auth/login', {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
-    schema: { tags: ['Auth'], summary: 'Log in with email/password and receive a JWT', security: [], body: z.object({ email: z.string().email(), password: z.string().min(1) }) },
+    schema: { tags: ['Auth'], summary: 'Log in with email/password and receive a JWT', security: [], body: z.object({ email: z.string().email(), password: z.string().min(1), remember: z.boolean().optional() }) },
   }, async (req) => {
-    const { email, password } = req.body;
+    const { email, password, remember } = req.body;
     const u = await one(`SELECT * FROM users WHERE lower(email) = lower($1)`, [email]);
     const fail = async (reason: string) => {
       await audit(req, { action: 'auth.login', resourceType: 'user', resourceId: u?.id, result: 'FAILURE', details: { email, reason } });
@@ -36,15 +36,49 @@ export async function authRoutes(app: FastifyInstance) {
     await query(`UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = now() WHERE id = $1`, [u.id]);
     // Transparently re-hash older, slower hashes (cost > 10) to keep logins fast.
     if (bcrypt.getRounds(u.password_hash) > 10) query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [u.id, await bcrypt.hash(password, 10)]).catch(() => undefined);
-    const { token, expiresAt } = signToken(u.id, u.organization_id);
+    const { token, expiresAt } = signToken(u.id, u.organization_id, remember);
     req.principal = { kind: 'user', id: u.id, orgId: u.organization_id, email: u.email, name: u.name, roles: [], permissions: new Set() };
     await audit(req, { action: 'auth.login', resourceType: 'user', resourceId: u.id });
+    return { token, expiresAt, user: await currentUser(u.id) };
+  });
+
+  // "Continue with Google": verifies a Google Identity Services ID token and signs in the
+  // EXISTING Perfmon user with that (verified) email. Accounts are never created this way —
+  // administrators invite users first (Administration → Users).
+  r.post('/auth/google', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    schema: { tags: ['Auth'], summary: 'Sign in with a Google ID token (GOOGLE_CLIENT_ID must be configured)', security: [], body: z.object({ credential: z.string().min(20).max(4096), remember: z.boolean().optional() }) },
+  }, async (req) => {
+    if (!config.googleClientId) throw new ApiError(404, 'NOT_CONFIGURED', 'Google sign-in is not configured on this server');
+    let claims: { aud?: string; email?: string; email_verified?: string | boolean; exp?: string; iss?: string };
+    try {
+      const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(req.body.credential)}`, { signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) throw new Error(`tokeninfo ${res.status}`);
+      claims = await res.json();
+    } catch {
+      throw unauthorized('Google sign-in could not be verified. Please try again.');
+    }
+    const verified = claims.email_verified === true || claims.email_verified === 'true';
+    const issuerOk = claims.iss === 'accounts.google.com' || claims.iss === 'https://accounts.google.com';
+    if (claims.aud !== config.googleClientId || !issuerOk || !verified || !claims.email || Number(claims.exp) * 1000 < Date.now()) {
+      throw unauthorized('Google sign-in could not be verified. Please try again.');
+    }
+    const u = await one(`SELECT * FROM users WHERE lower(email) = lower($1)`, [claims.email]);
+    if (!u || !u.is_active) {
+      await audit(req, { action: 'auth.login_google', resourceType: 'user', resourceId: u?.id, result: 'FAILURE', details: { email: claims.email, reason: 'no_account' } });
+      throw new ApiError(403, 'NO_ACCOUNT', `There is no active Perfmon account for ${claims.email}. Ask an administrator to invite you.`);
+    }
+    await query(`UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = now() WHERE id = $1`, [u.id]);
+    const { token, expiresAt } = signToken(u.id, u.organization_id, req.body.remember);
+    req.principal = { kind: 'user', id: u.id, orgId: u.organization_id, email: u.email, name: u.name, roles: [], permissions: new Set() };
+    await audit(req, { action: 'auth.login_google', resourceType: 'user', resourceId: u.id });
     return { token, expiresAt, user: await currentUser(u.id) };
   });
 
   r.get('/auth/config', { schema: { tags: ['Auth'], summary: 'Public sign-in configuration (demo hint when SHOW_DEMO_CREDENTIALS=true)', security: [] } }, async () => ({
     demo: config.showDemoCredentials && config.demoAdminPassword ? { email: config.demoAdminEmail, password: config.demoAdminPassword } : null,
     passwordResetEnabled: true,
+    googleClientId: config.googleClientId || null,
   }));
 
   r.post('/auth/logout', { schema: { tags: ['Auth'], summary: 'Revoke the current token' } }, async (req) => {

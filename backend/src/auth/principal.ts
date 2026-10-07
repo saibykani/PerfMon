@@ -25,9 +25,11 @@ declare module 'fastify' {
   }
 }
 
-export function signToken(userId: string, orgId: string) {
+/** `remember` ("Keep me signed in") issues a longer-lived session (JWT_REMEMBER_EXPIRES_IN, default 30 days). */
+export function signToken(userId: string, orgId: string, remember = false) {
   const jti = randomUUID();
-  const token = jwt.sign({ sub: userId, org: orgId, jti }, config.jwtSecret, { expiresIn: config.jwtExpiresIn as any, issuer: 'perfmon' });
+  const expiresIn = remember ? config.jwtRememberExpiresIn : config.jwtExpiresIn;
+  const token = jwt.sign({ sub: userId, org: orgId, jti }, config.jwtSecret, { expiresIn: expiresIn as any, issuer: 'perfmon' });
   const decoded = jwt.decode(token) as { exp: number };
   return { token, jti, expiresAt: new Date(decoded.exp * 1000) };
 }

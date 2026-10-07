@@ -13,10 +13,16 @@ export class ApiError extends Error {
 export const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '').replace(/\/$/, '');
 
 const TOKEN_KEY = 'perfmon.token';
+/** "Keep me signed in" keeps the session in localStorage; otherwise it lives only for this browser session. */
 export const tokenStore = {
-  get: () => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } },
-  set: (t: string) => { try { localStorage.setItem(TOKEN_KEY, t); } catch { /* ignore */ } },
-  clear: () => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } },
+  get: () => { try { return localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY); } catch { return null; } },
+  set: (t: string, remember = true) => {
+    try {
+      (remember ? sessionStorage : localStorage).removeItem(TOKEN_KEY);
+      (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, t);
+    } catch { /* ignore */ }
+  },
+  clear: () => { try { localStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } },
 };
 
 let onUnauthorized: (() => void) | null = null;
