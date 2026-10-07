@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Flag, FileText, GitCompare, RefreshCw, Square, CheckSquare, ChevronDown, GitBranch, GitCommit, Package, Server, Clock, Star, Gauge, Radio } from 'lucide-react';
+import { Flag, FileText, GitCompare, RefreshCw, Square, CheckSquare, ChevronDown, GitBranch, GitCommit, Package, Server, Clock, Star, Gauge, Radio, DatabaseZap } from 'lucide-react';
 import { api, ApiError } from '@/services/api';
 import { useAuth } from '@/stores/auth';
 import { StatusBadge } from '@/components/Status';
@@ -9,6 +9,7 @@ import { ConfirmDialog } from '@/components/ui';
 import { fmtDate, fmtDuration } from '@/components/format';
 import { CopyButton, Popover, StatusChip } from './common';
 import type { RunDetail } from './types';
+import { InfluxImportDialog } from './InfluxImportDialog';
 
 function ScoreRing({ score }: { score: number | null }) {
   const v = score ?? 0;
@@ -30,6 +31,7 @@ export function RunHeader({ run, live, onNotice }: { run: RunDetail; live?: bool
   const qc = useQueryClient();
   const nav = useNavigate();
   const [confirm, setConfirm] = useState<null | 'complete' | 'abort'>(null);
+  const [influx, setInflux] = useState(false);
   const refresh = () => { qc.invalidateQueries({ queryKey: ['run', run.runId] }); qc.invalidateQueries({ queryKey: ['run-sub', run.runId] }); };
   const err = (e: unknown) => onNotice((e as Error).message, 'err');
 
@@ -76,6 +78,7 @@ export function RunHeader({ run, live, onNotice }: { run: RunDetail; live?: bool
             <button className="btn btn-sm" disabled={baseline.isPending} onClick={() => baseline.mutate(!run.isBaseline)}><Flag size={14} />{run.isBaseline ? 'Unmark baseline' : 'Mark as baseline'}</button>
           )}
           {can('EXECUTE_TEST') && !running && <button className="btn btn-sm" disabled={reanalyze.isPending} onClick={() => reanalyze.mutate()}><RefreshCw size={14} className={reanalyze.isPending ? 'spin' : ''} />Re-analyze</button>}
+          {can('INGEST_METRICS') && !['ANALYZING', 'CANCELLED'].includes(run.status) && <button className="btn btn-sm" onClick={() => setInflux(true)} title="Pull JMeter Backend Listener results from your InfluxDB into this run"><DatabaseZap size={14} />Import from InfluxDB</button>}
           {can('EXPORT_REPORT') && <button className="btn btn-sm btn-primary" disabled={report.isPending} onClick={() => report.mutate()}><FileText size={14} />Generate report</button>}
         </div>
       </div>
@@ -126,6 +129,7 @@ export function RunHeader({ run, live, onNotice }: { run: RunDetail; live?: bool
         </dl>
       </div>
 
+      {influx && <InfluxImportDialog run={run} open={influx} onClose={() => setInflux(false)} onNotice={onNotice} />}
       <ConfirmDialog open={confirm === 'complete'} title="Complete this run?" danger={false} confirmLabel="Complete run"
         message={<>Buffered metrics are flushed, the end time is set and the analysis workflow (summary → SLA → regression → bottleneck → insights → score) starts for <b className="mono">{run.runId}</b>.</>}
         onConfirm={() => complete.mutate()} onClose={() => setConfirm(null)} />

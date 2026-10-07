@@ -9,9 +9,11 @@
   --text: #17202b;
   --text-2: #4a5565;
   --text-3: #7a8494;
-  --accent: #0f766e;
-  --accent-2: #0d9488;
-  --accent-soft: #e6f4f2;
+  --accent: #a8503f;
+  --accent-2: #934434;
+  --accent-soft: #fbeee9;
+  --on-accent: #ffffff;
+  --brand-grad: linear-gradient(135deg, #f6cbbb, #e09a88 55%, #c47767);
   --pass: #15803d;
   --pass-soft: #e8f5ec;
   --warn: #b45309;
@@ -32,18 +34,20 @@
 }
 
 :root[data-theme='dark'] {
-  --bg: #0e1116;
-  --surface: #151a21;
-  --surface-2: #1b212a;
-  --surface-3: #232a35;
-  --border: #29313d;
-  --border-strong: #38424f;
-  --text: #e6eaf0;
-  --text-2: #aab3c0;
-  --text-3: #7c8697;
-  --accent: #2dd4bf;
-  --accent-2: #14b8a6;
-  --accent-soft: #10302d;
+  --bg: #0a0a0b;
+  --surface: #121214;
+  --surface-2: #18181b;
+  --surface-3: #222226;
+  --border: #27272b;
+  --border-strong: #37373d;
+  --text: #ededef;
+  --text-2: #a9a9b1;
+  --text-3: #7a7a84;
+  --accent: #eda792;
+  --accent-2: #f5bfae;
+  --accent-soft: #2e1d19;
+  --on-accent: #1f100c;
+  --brand-grad: linear-gradient(135deg, #fde6da, #eeb3a0 50%, #d98d7b);
   --pass: #4ade80;
   --pass-soft: #12291b;
   --warn: #fbbf24;
@@ -124,9 +128,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .btn:hover { background: var(--surface-2); }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 :root[data-theme='dark'] .btn-primary { color: #04201d; }
-.btn-primary:hover { background: var(--accent-2); }
+.btn-primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
 .btn-danger { color: var(--fail); border-color: var(--fail); }
 .btn-ghost { border-color: transparent; background: transparent; }
 .btn-sm { height: 26px; padding: 0 8px; font-size: 12px; }
@@ -286,6 +290,7 @@ table.table { width: 100%; border-collapse: separate; border-spacing: 0; }
 /* ---------- logo (app shell) ---------- */
 .logo { display: flex; align-items: center; gap: 10px; }
 .logo-word { font-family: var(--font); font-weight: 700; font-size: 18px; letter-spacing: -0.02em; line-height: 1; }
-.logo-word span { background: linear-gradient(100deg, #7c3aed, #0284c7 55%, #65a30d); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.logo-word span { background: linear-gradient(100deg, #c47767, #a8503f 60%, #d98d7b); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .logo-tag { font-size: 10.5px; color: var(--text-3); margin-top: 2px; }
-:root[data-theme='dark'] .logo-word span { background-image: linear-gradient(100deg, #c4b5fd, #7dd3fc 55%, #bef264); }
+:root[data-theme='dark'] .logo-word span { background-image: linear-gradient(100deg, #fde6da, #eeb3a0 50%, #d98d7b); }
+.avatar-btn { border: 0; cursor: pointer; padding: 0; } .avatar-btn:hover { box-shadow: 0 0 0 2px var(--accent); }

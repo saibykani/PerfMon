@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode, type MutableRefObject } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, ArrowRight, CheckCircle2, Eye, EyeOff, Heart } from 'lucide-react';
+import { AlertCircle, ArrowRight, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '@/stores/auth';
 import { api, ApiError, API_BASE } from '@/services/api';
 import { LogoMark } from '@/components/Logo';
@@ -22,135 +22,109 @@ function explain(err: unknown): string {
   return 'Couldn’t reach the Perfmon API. Check your connection and that the backend is running.';
 }
 
-/* ------------------------------------------------------------------ Pulse: heart-monitor trace */
+/* ------------------------------------------------------------------ Scene: a load test in motion */
 
 type Mode = 'idle' | 'busy' | 'success' | 'error';
 interface SignalCtl { pulse: () => void; mode: Mode }
 
-/** True when the browser renders without GPU acceleration or the device is low-end. */
-function detectLowPower() {
-  try {
-    if ((navigator.hardwareConcurrency ?? 8) <= 2) return true;
-    const gl = document.createElement('canvas').getContext('webgl');
-    if (!gl) return true;
-    const ext = gl.getExtension('WEBGL_debug_renderer_info');
-    const renderer = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
-    gl.getExtension('WEBGL_lose_context')?.loseContext();
-    return /swiftshader|llvmpipe|software|basic render/i.test(renderer);
-  } catch {
-    return false;
+const BARS = 56;
+/** deterministic pseudo-random so the skyline has the same shape on every render */
+const rnd = (i: number) => { const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); };
+const SKYLINE = Array.from({ length: BARS }, (_, i) => {
+  const ramp = Math.min(1, i / 14);                         // ramp-up, then a steady plateau
+  return { h: 0.28 + 0.55 * ramp + 0.17 * rnd(i), d: (rnd(i + 99) * 2.4).toFixed(2), s: (2.6 + rnd(i + 7) * 2.2).toFixed(2) };
+});
+
+/** Smooth latency polyline (two periods so a translateX(-50%) loop is seamless). */
+function latencyPath(w: number, h: number, base: number, amp: number, seed: number) {
+  const pts: string[] = [];
+  const n = 48;
+  for (let k = 0; k <= n * 2; k++) {
+    const u = (k % n) / n;
+    const y = base + amp * (Math.sin(u * Math.PI * 2 * 3 + seed) * 0.5 + Math.sin(u * Math.PI * 2 * 7 + seed * 2) * 0.22 + (rnd(k % n + seed * 10) - 0.5) * 0.35);
+    pts.push(`${((k / n) * w).toFixed(1)},${(h - y).toFixed(1)}`);
   }
+  return 'M' + pts.join(' L');
+}
+const P50 = latencyPath(1200, 160, 52, 22, 1);
+const P95 = latencyPath(1200, 160, 104, 34, 1);
+
+/** Sample metrics that drift like a steady-state load test. Clearly labelled as sample data. */
+function useSampleRun() {
+  const [m, setM] = useState({ tps: 1284, p95: 412, err: 0.02, vus: 500 });
+  useEffect(() => {
+    if (reducedMotion()) return;
+    const t = setInterval(() => setM((v) => ({
+      tps: Math.round(Math.max(1180, Math.min(1390, v.tps + (Math.random() - 0.5) * 60))),
+      p95: Math.round(Math.max(360, Math.min(470, v.p95 + (Math.random() - 0.5) * 26))),
+      err: +Math.max(0, Math.min(0.09, v.err + (Math.random() - 0.5) * 0.02)).toFixed(2),
+      vus: 500,
+    })), 1800);
+    return () => clearInterval(t);
+  }, []);
+  return m;
 }
 
-/** One PQRST heartbeat, u in [0,1) → offset in units of amplitude (negative = up). */
-function beat(u: number) {
-  const g = (c: number, w: number, a: number) => a * Math.exp(-((u - c) ** 2) / (2 * w * w));
-  return g(0.18, 0.025, -0.12) + g(0.3, 0.008, 0.18) + g(0.33, 0.011, -1) + g(0.365, 0.01, 0.38) + g(0.58, 0.045, -0.22);
+function Spark({ seed, up = false }: { seed: number; up?: boolean }) {
+  const d = Array.from({ length: 24 }, (_, k) => {
+    const y = 14 - (up ? k * 0.35 : 0) - 6 * Math.sin(k * 0.7 + seed) * 0.5 - (rnd(k + seed * 31) - 0.5) * 6;
+    return `${k * 4},${Math.max(2, Math.min(22, y)).toFixed(1)}`;
+  }).join(' L');
+  return <svg className="spark" viewBox="0 0 92 24" aria-hidden="true"><path d={`M${d}`} /></svg>;
 }
 
 /**
- * A sweeping ECG trace (like a bedside monitor) on a cheap 1x canvas: a ring buffer of
- * samples, a moving write head and an erase gap. Typing adds blips, signing in raises the
- * heart rate, success turns it green, an error spikes red.
+ * The backdrop reads the page's sign-in state from `ctl` without re-rendering React:
+ * it mirrors ctl.mode into a data attribute that CSS animates (busy speeds the skyline up,
+ * success lifts it, error flashes it red) and `pulse()` flickers the bars as you type.
  */
-function Pulse({ ctl, onBpm }: { ctl: MutableRefObject<SignalCtl>; onBpm: (bpm: number) => void }) {
-  const ref = useRef<HTMLCanvasElement>(null);
+function Scene({ ctl }: { ctl: MutableRefObject<SignalCtl> }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const m = useSampleRun();
   useEffect(() => {
-    const c = ref.current!;
-    const ctx = c.getContext('2d')!;
-    const STEP = 3;      // px per sample
-    const SWEEP = 300;   // px per second
-    let W = 0, H = 0, N = 0, raf = 0, last = 0;
-    let ys = new Float32Array(0);
-    let head = 0, phase = 0, blip = 0, spike = 0, green = 0, bpm = 64, shownBpm = 0;
-    const resize = () => {
-      W = c.clientWidth; H = c.clientHeight;
-      c.width = W; c.height = H;
-      N = Math.max(2, Math.ceil(W / STEP) + 1);
-      ys = new Float32Array(N).fill(H / 2);
-      head = 0;
+    const el = ref.current!;
+    let pulseTimer: number | undefined;
+    ctl.current.pulse = () => {
+      el.dataset.pulse = '1';
+      window.clearTimeout(pulseTimer);
+      pulseTimer = window.setTimeout(() => { delete el.dataset.pulse; }, 220);
     };
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(c);
-    ctl.current.pulse = () => { blip = Math.min(1, blip + 0.5); };
-
-    const advance = (samples: number) => {
-      const mode = ctl.current.mode;
-      const target = mode === 'busy' ? 150 : mode === 'success' ? 58 : 64 + blip * 36;
-      bpm += (target - bpm) * 0.06;
-      green += ((mode === 'success' ? 1 : 0) - green) * 0.08;
-      if (mode === 'error' && spike < 0.05) spike = 1;
-      for (let k = 0; k < samples; k++) {
-        phase += (bpm / 60) * (STEP / SWEEP);
-        if (phase >= 1) phase -= 1;
-        const amp = H * 0.36;
-        let y = beat(phase) * amp + (Math.random() - 0.5) * (1 + blip * 6) + Math.sin(phase * 60) * blip * 5;
-        if (spike > 0.03) { y += spike * H * 0.38 * (k % 2 ? 1 : -1); spike *= 0.9; }
-        ys[head] = H * 0.5 + y;
-        head = (head + 1) % N;
-      }
-      blip *= 0.96;
-      const shown = Math.round(bpm);
-      if (shown !== shownBpm) { shownBpm = shown; onBpm(shown); }
-    };
-
-    const color = (a: number) => {
-      if (spike > 0.05) return `rgba(255,92,110,${a})`;
-      const r = Math.round(125 + (52 - 125) * green), g = Math.round(211 + (230 - 211) * green), b = Math.round(252 + (140 - 252) * green);
-      return `rgba(${r},${g},${b},${a})`;
-    };
-
-    const draw = () => {
-      ctx.clearRect(0, 0, W, H);
-      const GAP = 16;          // erased samples ahead of the write head
-      const SEG = 6;           // trail drawn in segments with decaying alpha
-      const len = N - GAP;
-      const per = Math.ceil(len / SEG);
-      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-      for (let s = 0; s < SEG; s++) {
-        ctx.strokeStyle = color(0.06 + 0.94 * ((s + 1) / SEG) ** 2);
-        ctx.lineWidth = s >= SEG - 2 ? 2.2 : 1.5;
-        ctx.beginPath();
-        let prevX = -1;
-        for (let j = s * per; j <= Math.min(len - 1, (s + 1) * per); j++) {
-          const idx = (head + GAP + j) % N;       // oldest → newest
-          const x = idx * STEP;
-          if (prevX < 0 || x < prevX) ctx.moveTo(x, ys[idx]); // wrap at the right edge
-          else ctx.lineTo(x, ys[idx]);
-          prevX = x;
-        }
-        ctx.stroke();
-      }
-      const hi = (head - 1 + N) % N;
-      ctx.fillStyle = color(1);
-      ctx.shadowColor = color(0.9); ctx.shadowBlur = 16;
-      ctx.beginPath(); ctx.arc(hi * STEP, ys[hi], 3.4, 0, Math.PI * 2); ctx.fill();
-      ctx.shadowBlur = 0;
-    };
-
-    let lowPower = detectLowPower();
-    const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
-      if (now - last < (lowPower ? 50 : 16)) return;
-      const dt = last ? Math.min(120, now - last) : 16;
-      last = now;
-      advance(Math.max(1, Math.round(((dt / 1000) * SWEEP) / STEP)));
-      const t0 = performance.now();
-      draw();
-      if (!lowPower && performance.now() - t0 > 10) lowPower = true;
-    };
-    if (reducedMotion()) { advance(N); draw(); }
-    else raf = requestAnimationFrame(loop);
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
-  }, [ctl, onBpm]);
-  return <canvas ref={ref} className="pulse" aria-hidden="true" />;
+    const t = window.setInterval(() => { if (el.dataset.mode !== ctl.current.mode) el.dataset.mode = ctl.current.mode; }, 90);
+    return () => { window.clearInterval(t); window.clearTimeout(pulseTimer); };
+  }, [ctl]);
+  return (
+    <div ref={ref} className="scene" data-mode="idle" aria-hidden="true">
+      <div className="glow" />
+      <div className="grid-bg" />
+      <svg className="latency" viewBox="0 0 1200 160" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="lat-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#e09a88" stopOpacity=".18" /><stop offset="1" stopColor="#e09a88" stopOpacity="0" /></linearGradient>
+        </defs>
+        <g className="lat-move">
+          <path d={`${P95} L2400,160 L0,160 Z`} fill="url(#lat-fill)" />
+          <path d={P95} className="lat-p95" />
+          <path d={P50} className="lat-p50" />
+        </g>
+      </svg>
+      <div className="skyline">
+        {SKYLINE.map((b, i) => <i key={i} style={{ ['--h' as any]: b.h, ['--d' as any]: `-${b.d}s`, ['--s' as any]: `${b.s}s` }} />)}
+      </div>
+      <div className="cards left">
+        <div className="mcard c1"><span className="tag">Sample run</span><label>Throughput</label><b className="num">{m.tps.toLocaleString()}<em> req/s</em></b><Spark seed={1} /></div>
+        <div className="mcard c2"><label>P95 latency</label><b className="num">{m.p95}<em> ms</em></b><Spark seed={4} /></div>
+      </div>
+      <div className="cards right">
+        <div className="mcard c3"><label>Error rate</label><b className="num">{m.err.toFixed(2)}<em>%</em></b><Spark seed={7} /></div>
+        <div className="mcard c4"><label>Virtual users</label><b className="num">{m.vus}<em> ramped</em></b><Spark seed={2} up /></div>
+        <div className="mcard c5 sla"><span className="ok">✓</span><div><label>SLA · P95 &lt; 500 ms</label><b>Passed</b></div></div>
+      </div>
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ shell */
 
 function Shell({ children, ctl }: { children: ReactNode; ctl: MutableRefObject<SignalCtl> }) {
-  const [bpm, setBpm] = useState(64);
   const health = useQuery({
     queryKey: ['health-timed'], retry: false, refetchInterval: 20000, refetchOnWindowFocus: false,
     queryFn: async () => { const t0 = performance.now(); const r = await api.get<{ status: string }>('/health'); return { ...r, ms: Math.round(performance.now() - t0) }; },
@@ -158,23 +132,17 @@ function Shell({ children, ctl }: { children: ReactNode; ctl: MutableRefObject<S
   const up = health.data?.status === 'UP';
   return (
     <div className="auth">
-      <div className="grid-bg" />
-      <div className="aurora" />
-      <Pulse ctl={ctl} onBpm={setBpm} />
-      <div className="brand-giant" aria-hidden="true">PERFMON</div>
+      <Scene ctl={ctl} />
       <header className="top">
         <div className="auth-brand"><LogoMark size={30} /><span>Perf<b>mon</b></span></div>
-        <div className="chips">
-          <span className="chip" title="The trace reacts as you type and sign in"><Heart size={12} className="beat" /><b className="num">{bpm}</b> bpm</span>
-          <span className={`chip ${health.isError ? 'down' : up ? 'up' : ''}`} title="Measured round-trip to the Perfmon API">
-            <i />{health.isLoading ? 'Checking API…' : up ? <>API <b className="num">{health.data!.ms} ms</b></> : 'API unreachable'}
-          </span>
-        </div>
+        <span className={`chip ${health.isError ? 'down' : up ? 'up' : ''}`} title="Measured round-trip to the Perfmon API">
+          <i />{health.isLoading ? 'Checking API…' : up ? <>API <b className="num">{health.data!.ms} ms</b></> : 'API unreachable'}
+        </span>
       </header>
       {children}
       <footer className="foot">
         <span>© {new Date().getFullYear()} Perfmon</span>
-        <Link to="/help">Help</Link>
+        <Link to="/help">Help &amp; documentation</Link>
         <a href={`${API_BASE}/api/docs`} target="_blank" rel="noreferrer">API docs</a>
       </footer>
     </div>
@@ -183,9 +151,9 @@ function Shell({ children, ctl }: { children: ReactNode; ctl: MutableRefObject<S
 
 const Mark = () => (
   <div className="hero">
-    <div className="mark"><LogoMark size={60} animated /></div>
+    <div className="mark"><LogoMark size={76} animated /></div>
     <div className="wordmark">Perf<span>mon</span></div>
-    <div className="tagline">Performance Engineering <i /> Observability <i /> Intelligence</div>
+    <div className="tagline">Performance Engineering</div>
   </div>
 );
 

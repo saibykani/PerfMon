@@ -12,7 +12,7 @@ Perfmon is designed JMeter-first, and it needs no Perfmon plugin. It exposes an 
 | JTL import | After the test | `POST /api/v1/runs/<RunID>/artifacts` with `kind=JTL` | Histogram-based, about 2.5% resolution | Exact post-run analysis, tests without network access to Perfmon |
 | HTML report | After the test | `POST /api/v1/runs/<RunID>/artifacts` with `kind=HTML_REPORT` | As computed by JMeter | Archiving, report viewer, reconciliation |
 
-The options complement each other. A recommended setup uses the Backend Listener for live monitoring and uploads both the JTL and the HTML report at the end. Ready-made wrapper scripts that do all of this are described in [JMeter Integration Examples](41-jmeter-integration-examples.md).
+The options complement each other. A recommended setup uses the Backend Listener for live monitoring and uploads both the JTL and the HTML report at the end. Ready-made wrapper scripts that do all of this are described in [Set up JMeter for Perfmon](00b-jmeter-setup.md#the-wrapper-scripts).
 
 ## Prerequisites
 
@@ -27,7 +27,7 @@ The options complement each other. A recommended setup uses the Backend Listener
 
 API keys have the format `pmk_<8 hex characters>_<secret>`; only a SHA-256 hash is stored, so the secret is displayed once. Keys are managed by users with `MANAGE_API_KEYS` under Platform → Administration (`/admin`); the API contract is `POST /api/v1/api-keys` with `{"name":"jmeter-loadgen","scopes":["ingest"],"projectId":"<project-id>"}`, which returns the key including its one-time `secret`.
 
-> Note: In the current build the API-key management endpoints and the Administration page are still being delivered (see the README status table). Until they are available, ask your Perfmon administrator for a key. For short local trials a user JWT obtained from `POST /api/v1/auth/login` is also accepted as `influxdbToken`, because the endpoint accepts `Authorization: Token <JWT>`; JWTs expire after `JWT_EXPIRES_IN` (default 12 hours), so never use them for long tests or CI.
+> Create keys in the UI under Platform → Administration → **API keys → Create key** (scope **ingest**) — see [Users, roles & API keys](00e-users-and-api-keys.md). For short local trials a user JWT obtained from `POST /api/v1/auth/login` is also accepted as `influxdbToken` (`Authorization: Token <JWT>`); JWTs expire after `JWT_EXPIRES_IN` (default 12 hours), so never use them for long tests or CI.
 
 ## Backend Listener: step-by-step setup
 
@@ -81,7 +81,7 @@ Set the parameters as follows. Using JMeter properties (`${__P(...)}`) keeps the
 | `influxdbToken` | `${__P(perfmon.token)}` | Perfmon API key. JMeter sends it as `Authorization: Token <key>` |
 | `TAG_runId` (optional, add with **Add**) | `${__P(perfmon.runId)}` | Adds a `runId` tag to every point. Alternative way to identify the run when the URL cannot carry a query string |
 
-A complete listener definition is provided in `docs/jmeter/perfmon-backend-listener.jmx`; see also `docs/jmeter/backend-listener.md`.
+A complete test plan with this listener is available to download: [perfmon-sample-test.jmx](/samples/perfmon-sample-test.jmx).
 
 ### Step 6: Set the API key as influxdbToken
 
@@ -160,7 +160,7 @@ The Backend Listener element as it appears in a `.jmx` file (abbreviated to the 
         <stringProp name="Argument.metadata">=</stringProp>
       </elementProp>
       <!-- application, measurement, summaryOnly, samplersRegex, percentiles,
-           testTitle, eventTags, influxdbToken: see docs/jmeter/perfmon-backend-listener.jmx -->
+           testTitle, eventTags, influxdbToken: see /samples/perfmon-sample-test.jmx -->
     </collectionProp>
   </elementProp>
   <stringProp name="classname">org.apache.jmeter.visualizers.backend.influxdb.InfluxdbBackendListenerClient</stringProp>
@@ -376,4 +376,4 @@ A Backend Listener sends one request per interval per JMeter engine, which is fa
 - [Uploading HTML Reports](10-uploading-html-reports.md)
 - [Live Monitoring](12-live-monitoring.md)
 - [Troubleshooting](39-troubleshooting.md)
-- [JMeter Integration Examples](41-jmeter-integration-examples.md)
+- [Set up JMeter for Perfmon](00b-jmeter-setup.md)

@@ -1,0 +1,30 @@
+# Optional: InfluxDB 1.8 + Grafana for teams that want JMeter data in InfluxDB/Grafana alongside Perfmon.
+# Perfmon itself does NOT need this. Ports avoid Perfmon's stack (8086 and 3000/3002 are used there).
+#   docker compose -f influxdb-grafana-compose.yml up -d
+#   InfluxDB 1.8:  http://localhost:18086   db=jmeter   writer jmeter / Jmeter-Pass-123   admin admin / Change-Me-123
+#   Grafana:       http://localhost:3003    admin / admin (you are asked to change it)
+# JMeter Backend Listener → influxdbUrl = http://<this-host>:18086/write?db=jmeter&u=jmeter&p=Jmeter-Pass-123
+# Change every password before using this outside a lab.
+name: jmeter-influx
+services:
+  influxdb:
+    image: influxdb:1.8
+    environment:
+      INFLUXDB_DB: jmeter
+      INFLUXDB_HTTP_AUTH_ENABLED: "true"
+      INFLUXDB_ADMIN_USER: admin
+      INFLUXDB_ADMIN_PASSWORD: Change-Me-123
+      INFLUXDB_USER: jmeter
+      INFLUXDB_USER_PASSWORD: Jmeter-Pass-123
+    ports: ["18086:8086"]
+    volumes: [influxdb18:/var/lib/influxdb]
+    restart: unless-stopped
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3003:3000"]
+    volumes: [grafana:/var/lib/grafana]
+    depends_on: [influxdb]
+    restart: unless-stopped
+volumes:
+  influxdb18:
+  grafana:

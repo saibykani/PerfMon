@@ -116,7 +116,7 @@ jmeter -n -t perf/payment-load.jmx -l results.jtl -j jmeter.log -e -o report \
 | `summaryOnly` | `false` (per-transaction metrics) |
 | `percentiles` | `50;90;95;99` |
 
-The listener posts every few seconds; Perfmon answers `204` like InfluxDB. The ingestion endpoints are excluded from the global API rate limit but have a per-key token bucket (`INGEST_RATE_LIMIT_PER_SEC`, default 100 requests/s, burst 2x). Details and alternatives (JSON batch ingestion, `.jtl` only) are in [JMeter Integration](09-jmeter-integration.md) and [JMeter Integration Examples](41-jmeter-integration-examples.md). A ready-made listener and wrapper scripts are in `docs/jmeter/`.
+The listener posts every few seconds; Perfmon answers `204` like InfluxDB. The ingestion endpoints are excluded from the global API rate limit but have a per-key token bucket (`INGEST_RATE_LIMIT_PER_SEC`, default 100 requests/s, burst 2x). Details and alternatives (JSON batch ingestion, `.jtl` only) are in [JMeter Integration](09-jmeter-integration.md) and [Set up JMeter for Perfmon](00b-jmeter-setup.md). A ready-made test plan and wrapper scripts are on the Help page under Downloads.
 
 If JMeter exits with a non-zero code, keep going: upload whatever was produced and complete the run with `status: "FAILED"` so the run does not stay `RUNNING`.
 

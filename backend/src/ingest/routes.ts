@@ -1,9 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { aggregator, type AggregatePoint, type RawSample } from './aggregator.js';
-import { parseLineProtocol } from './lineProtocol.js';
+import { parseLineProtocol, type LinePoint } from './lineProtocol.js';
 import { resolveRun, ensureIngestible, type RunRef } from './runCache.js';
 import { checkIngestRate } from './rateLimit.js';
-import { requirePermission, principalOf } from '../auth/principal.js';
+import { requirePermission, principalOf, type Principal } from '../auth/principal.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { typed, z } from '../lib/http.js';
 import { one, query, bulkInsert, pool } from '../db/pool.js';
@@ -108,17 +108,62 @@ const PCT_FIELD: Record<string, keyof AggregatePoint> = { 'pct50.0': 'p50', 'pct
 async function handleInflux(req: FastifyRequest, body: string) {
   const q = req.query as Record<string, string | undefined>;
   const { points, errors } = parseLineProtocol(body, q.precision);
-  const measurementName = q.measurement || 'jmeter';
-  const byRun = new Map<string, { run: RunRef; groups: Map<string, Record<string, Record<string, any>>>; threads: { ts: number; v: number; s?: number; f?: number }[]; events: { ts: number; text: string }[]; generic: any[] }>();
-  const principal = principalOf(req);
+  const accepted = await ingestLinePoints(principalOf(req), points, { runKey: q.runId, measurement: q.measurement });
+  if (errors.length) selfMetrics.inc('ingest_parse_errors', errors.length);
+  return { accepted, parseErrors: errors };
+}
+
+interface JmeterRow { txn: string; ts: number; kind: string; data: Record<string, any> }
+
+/**
+ * Groups the all/ok/ko/response-code lines of one listener send per transaction.
+ * JMeter stamps each line separately, so lines of the same send can differ by a few ms;
+ * grouping by exact timestamp would count a transaction's "all" and "ok" lines twice.
+ * Sends are ≥ 1 s apart, so lines within 500 ms of a group's first line (and not
+ * repeating a kind already in it) belong to the same send.
+ */
+function groupSends(rows: JmeterRow[]): Record<string, Record<string, any>>[] {
+  const byTxn = new Map<string, JmeterRow[]>();
+  for (const r of rows) (byTxn.get(r.txn) ?? byTxn.set(r.txn, []).get(r.txn)!).push(r);
+  const out: Record<string, Record<string, any>>[] = [];
+  for (const list of byTxn.values()) {
+    list.sort((a, b) => a.ts - b.ts);
+    let cur: { start: number; g: Record<string, Record<string, any>> } | null = null;
+    for (const r of list) {
+      if (!cur || r.ts - cur.start > 500 || cur.g[r.kind]) out.push((cur = { start: r.ts, g: {} }).g);
+      cur.g[r.kind] = { ...r.data, __ts: cur.start };
+    }
+  }
+  return out;
+}
+
+export interface LineIngestOptions {
+  runKey?: string;
+  measurement?: string;
+  /** metric source: 'live' for the Backend Listener, 'import' for InfluxDB imports */
+  source?: string;
+  /** accept data for finished runs (imports of historical results) */
+  allowCompleted?: boolean;
+  /** interval of the reported points; inferred from consecutive writes when omitted */
+  intervalSec?: number;
+}
+
+/**
+ * Stores JMeter InfluxdbBackendListenerClient points (measurement `jmeter`, plus `events`
+ * annotations and any other measurement as generic metrics) for their runs.
+ */
+export async function ingestLinePoints(principal: Principal, points: LinePoint[], opts: LineIngestOptions = {}) {
+  const measurementName = opts.measurement || 'jmeter';
+  const source = opts.source ?? 'live';
+  const byRun = new Map<string, { run: RunRef; rows: JmeterRow[]; threads: { ts: number; v: number; s?: number; f?: number }[]; events: { ts: number; text: string }[]; generic: any[] }>();
 
   for (const p of points) {
-    const runKey = q.runId || p.tags.runId || p.tags.run_id || p.tags.runid || (/^PF-\d{4}-\d{2}-\d{2}-\d+$/.test(p.tags.application ?? '') ? p.tags.application : undefined);
+    const runKey = opts.runKey || p.tags.runId || p.tags.run_id || p.tags.runid || (/^PF-\d{4}-\d{2}-\d{2}-\d+$/.test(p.tags.application ?? '') ? p.tags.application : undefined);
     if (!runKey) throw badRequest('Run ID is required: add ?runId=<RUN_ID> to the listener URL or a TAG_runId listener parameter');
     let entry = byRun.get(runKey);
     if (!entry) {
       const run = await resolveRun(runKey, principal);
-      byRun.set(runKey, (entry = { run, groups: new Map(), threads: [], events: [], generic: [] }));
+      byRun.set(runKey, (entry = { run, rows: [], threads: [], events: [], generic: [] }));
     }
     const ts = p.timestamp ?? Date.now();
     if (p.measurement === measurementName) {
@@ -128,11 +173,8 @@ async function handleInflux(req: FastifyRequest, body: string) {
         entry.threads.push({ ts, v, s: Number(p.fields.startedT ?? NaN), f: Number(p.fields.endedT ?? NaN) });
         continue;
       }
-      const gk = `${txn}|${ts}`;
-      const g = entry.groups.get(gk) ?? {};
       const kind = p.tags.responseCode !== undefined ? 'err:' + p.tags.responseCode + ':' + (p.tags.responseMessage ?? '') : (p.tags.statut ?? (txn === 'all' ? 'total' : 'all'));
-      g[kind] = { ...p.fields, __txn: txn, __ts: ts, __rc: p.tags.responseCode, __rm: p.tags.responseMessage };
-      entry.groups.set(gk, g);
+      entry.rows.push({ txn, ts, kind, data: { ...p.fields, __txn: txn, __rc: p.tags.responseCode, __rm: p.tags.responseMessage } });
     } else if (p.measurement === 'events') {
       entry.events.push({ ts, text: String(p.fields.text ?? p.tags.title ?? 'event') });
     } else {
@@ -141,18 +183,19 @@ async function handleInflux(req: FastifyRequest, body: string) {
   }
 
   let accepted = 0;
-  for (const { run, groups, threads, events, generic } of byRun.values()) {
-    const tsList = [...groups.values()].flatMap((g) => Object.values(g).map((x) => x.__ts as number));
+  for (const { run, rows, threads, events, generic } of byRun.values()) {
+    const groups = groupSends(rows);
+    const tsList = groups.flatMap((g) => Object.values(g).map((x) => x.__ts as number));
     const prev = lastTsPerRun.get(run.id);
     const sorted = [...new Set(tsList)].sort((a, b) => a - b);
     const first = sorted[0] ?? threads[0]?.ts ?? Date.now();
-    let intervalSec = prev && first > prev ? Math.round((first - prev) / 1000) : 5;
+    let intervalSec = opts.intervalSec ?? (prev && first > prev ? Math.round((first - prev) / 1000) : 5);
     if (!(intervalSec >= 1 && intervalSec <= 60)) intervalSec = 5;
-    if (sorted.length) lastTsPerRun.set(run.id, sorted[sorted.length - 1]);
-    await ensureIngestible(run, new Date(first));
+    if (sorted.length && source === 'live') lastTsPerRun.set(run.id, sorted[sorted.length - 1]);
+    await ensureIngestible(run, new Date(first), opts.allowCompleted);
 
     const aggs: AggregatePoint[] = [];
-    for (const g of groups.values()) {
+    for (const g of groups) {
       const base = g.all ?? g.total ?? null;
       const ok = g.ok;
       const ko = g.ko;
@@ -186,18 +229,17 @@ async function handleInflux(req: FastifyRequest, body: string) {
       }
       aggs.push(point);
     }
-    if (aggs.length) aggregator.addAggregates(run, aggs);
-    for (const t of threads) aggregator.setThreads(run, t.ts, t.v, Number.isFinite(t.s!) ? t.s : null, Number.isFinite(t.f!) ? t.f : null);
+    if (aggs.length) aggregator.addAggregates(run, aggs, source);
+    for (const t of threads) aggregator.setThreads(run, t.ts, t.v, Number.isFinite(t.s!) ? t.s : null, Number.isFinite(t.f!) ? t.f : null, source);
     for (const e of events) {
-      await query(`INSERT INTO events (project_id, application_id, environment_id, run_id, type, ts, title, source) VALUES ($1,$2,$3,$4,$5,$6,$7,'jmeter')`,
-        [run.projectId, run.applicationId, run.environmentId, run.id, /end|finish|stop/i.test(e.text) ? 'TEST_END' : /start/i.test(e.text) ? 'TEST_START' : 'OTHER', new Date(e.ts), e.text.slice(0, 300)]);
+      await query(`INSERT INTO events (project_id, application_id, environment_id, run_id, type, ts, title, source) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [run.projectId, run.applicationId, run.environmentId, run.id, /end|finish|stop/i.test(e.text) ? 'TEST_END' : /start/i.test(e.text) ? 'TEST_START' : 'OTHER', new Date(e.ts), e.text.slice(0, 300), source === 'live' ? 'jmeter' : 'influx_import']);
     }
-    if (generic.length) await insertGeneric(run, generic);
+    if (generic.length) await insertGeneric(run, generic, source === 'live' ? 'api' : 'influx_import');
     accepted += aggs.length + threads.length + events.length + generic.length;
   }
   await aggregator.maybeFlush();
-  if (errors.length) selfMetrics.inc('ingest_parse_errors', errors.length);
-  return { accepted, parseErrors: errors };
+  return accepted;
 }
 
 async function insertGeneric(run: RunRef | null, pts: { ts: number; metric: string; value: number; tags?: Record<string, string>; projectId?: string | null; environmentId?: string | null }[], source = 'api') {

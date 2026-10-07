@@ -7,7 +7,10 @@ import { typed, z, idParams, assertProject } from '../lib/http.js';
 import { encryptSecret, decryptSecret } from '../lib/crypto.js';
 import { enqueue } from '../jobs/queue.js';
 import { resolveRun, type RunRef } from '../ingest/runCache.js';
-import { insertGeneric } from '../ingest/routes.js';
+import { insertGeneric, ingestLinePoints } from '../ingest/routes.js';
+import { aggregator, deleteRunMetrics } from '../ingest/aggregator.js';
+import { completeRun } from '../runs/service.js';
+import { fetchJmeterPoints, inferIntervalSec } from './jmeterInflux.js';
 import { selfMetrics } from '../selfmon/registry.js';
 import { allConnectors, connectorFor } from './connectors/index.js';
 import type { Credentials, ImportQuery, IntegrationRecord, RunWindow } from './connectors/types.js';
@@ -242,6 +245,75 @@ export async function integrationRoutes(app: FastifyInstance) {
       [row.id, health, result.ok ? null : result.message, result.ok]);
     await audit(req, { action: 'integration.test', resourceType: 'integration', resourceId: row.id, result: result.ok ? 'SUCCESS' : 'FAILURE', details: { health, latencyMs: result.latencyMs, message: result.message } });
     return { ...result, health };
+  });
+
+  // JMeter results that the Backend Listener wrote to the team's own InfluxDB → a Perfmon run
+  r.post('/runs/:runId/import/influx-jmeter', {
+    preHandler: requirePermission('INGEST_METRICS'),
+    schema: {
+      tags: ['Integrations'], summary: 'Import JMeter Backend Listener results from an external InfluxDB into a run',
+      description: 'Reads the JMeter measurement (all transactions, statuses, percentiles, response codes, thread counts and `events` annotations) from an InfluxDB integration for the time window and stores it like live listener data (source `import`, replaced on re-import). Finished runs are re-analyzed; `complete: true` completes a not-yet-finished run afterwards.',
+      params: z.object({ runId: z.string().min(1) }),
+      body: z.object({
+        integrationId: z.string().uuid(),
+        measurement: z.string().min(1).max(200).default('jmeter'),
+        application: z.string().max(300).optional().nullable(),
+        from: z.string().datetime({ offset: true }).optional(),
+        to: z.string().datetime({ offset: true }).optional(),
+        complete: z.boolean().default(false),
+      }),
+    },
+  }, async (req) => {
+    const p = principalOf(req);
+    const b = req.body;
+    const row = await owned(req, b.integrationId);
+    if (row.type !== 'INFLUXDB') throw badRequest('Choose an InfluxDB integration');
+    if (row.status === 'DISABLED') throw badRequest('Integration is disabled');
+    const ref = await resolveRun(req.params.runId, p, true);
+    if (row.project_id && row.project_id !== ref.projectId) throw badRequest('Integration is bound to a different project than the run');
+    if (['ANALYZING', 'CANCELLED'].includes(ref.status)) throw badRequest(`Run ${ref.runKey} is ${ref.status}; wait for analysis to finish or use another run`);
+
+    const tr = await one(`SELECT started_at, ended_at FROM test_runs WHERE id = $1`, [ref.id]);
+    const from = b.from ? new Date(b.from) : tr.started_at ? new Date(new Date(tr.started_at).getTime() - 60_000) : null;
+    const to = b.to ? new Date(b.to) : tr.ended_at ? new Date(new Date(tr.ended_at).getTime() + 60_000) : tr.started_at ? new Date() : null;
+    if (!from || !to) throw badRequest(`Run ${ref.runKey} has no start time — give the test's time window (from / to)`);
+    if (to <= from) throw badRequest('"to" must be after "from"');
+    if (to.getTime() - from.getTime() > 7 * 86_400_000) throw badRequest('The time window is limited to 7 days per import');
+
+    const t0 = performance.now();
+    let points;
+    try {
+      points = await fetchJmeterPoints(toRecord(row), await loadCredentials(row.id), { measurement: b.measurement, application: b.application || null, from, to });
+    } catch (e) {
+      await query(`UPDATE integrations SET health = 'DOWN', last_error = $2, updated_at = now() WHERE id = $1`, [row.id, (e as Error).message]);
+      throw badRequest((e as Error).message);
+    }
+    const jmeter = points.filter((x) => x.measurement === b.measurement);
+    if (!jmeter.length) {
+      throw badRequest(`No "${b.measurement}" points found in ${row.name} between ${from.toISOString()} and ${to.toISOString()}${b.application ? ` for application "${b.application}"` : ''}. Check the time window, measurement and application tag.`);
+    }
+
+    // re-import replaces earlier imported data for this run
+    await aggregator.flush(true, ref.id);
+    await deleteRunMetrics(ref.id, 'import');
+    await query(`DELETE FROM events WHERE run_id = $1 AND source = 'influx_import'`, [ref.id]);
+    const accepted = await ingestLinePoints(p, points, { runKey: ref.runKey, measurement: b.measurement, source: 'import', allowCompleted: true, intervalSec: inferIntervalSec(jmeter) });
+    await aggregator.flush(true, ref.id);
+
+    const first = Math.min(...jmeter.map((x) => x.timestamp ?? Infinity));
+    const last = Math.max(...jmeter.map((x) => x.timestamp ?? 0));
+    await query(`UPDATE test_runs SET started_at = LEAST(COALESCE(started_at, $2), $2), updated_at = now() WHERE id = $1`, [ref.id, new Date(first)]);
+    const st = await one(`SELECT status FROM test_runs WHERE id = $1`, [ref.id]);
+    let status = st.status as string;
+    if (['COMPLETED', 'FAILED', 'ABORTED'].includes(status)) await enqueue('run.reanalyze', { runId: ref.id }, { runId: ref.id, priority: 2 });
+    else if (b.complete) status = (await completeRun(p, ref.runKey, { endedAt: new Date(last).toISOString() })).status;
+    await query(`UPDATE integrations SET last_import_at = now(), health = 'HEALTHY', last_error = NULL, last_connected_at = now(), updated_at = now() WHERE id = $1`, [row.id]);
+
+    const transactions = new Set(jmeter.map((x) => x.tags.transaction).filter((t) => t && t !== 'all' && t !== 'internal')).size;
+    selfMetrics.inc('integration_imported_points', accepted);
+    await audit(req, { action: 'integration.import_jmeter', resourceType: 'integration', resourceId: row.id, result: 'SUCCESS',
+      details: { runId: ref.runKey, points: jmeter.length, transactions, from, to, durationMs: Math.round(performance.now() - t0) } });
+    return { runId: ref.runKey, points: jmeter.length, events: points.length - jmeter.length, transactions, from: new Date(first).toISOString(), to: new Date(last).toISOString(), status };
   });
 
   r.post('/integrations/:id/import', {

@@ -19,7 +19,7 @@ export const SEQUENTIAL = ['#cde2fb', '#b7d3f6', '#9ec5f4', '#86b6ef', '#6da7ec'
 
 export const CHROME = {
   light: { surface: '#ffffff', ink: '#17202b', ink2: '#4a5565', muted: '#7a8494', grid: '#e9ecf0', axis: '#c6ccd5', tooltipBg: '#ffffff', tooltipBorder: '#dde1e7' },
-  dark: { surface: '#151a21', ink: '#e6eaf0', ink2: '#aab3c0', muted: '#7c8697', grid: '#252c37', axis: '#38424f', tooltipBg: '#1b212a', tooltipBorder: '#38424f' },
+  dark: { surface: '#121214', ink: '#ededef', ink2: '#a9a9b1', muted: '#7a7a84', grid: '#232327', axis: '#37373d', tooltipBg: '#18181b', tooltipBorder: '#37373d' },
 };
 
 /**

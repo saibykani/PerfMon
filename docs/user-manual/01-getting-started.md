@@ -148,7 +148,7 @@ The following sequence creates the inventory, creates a run, streams metrics fro
 
 7. Open Testing → Test Runs (`/runs/<RunID>`) to see the summary, SLA evaluation, regressions, insights, score and result once the run reaches `COMPLETED`.
 
-The wrapper scripts `docs/jmeter/run-with-perfmon.sh` and `docs/jmeter/run-with-perfmon.ps1` automate steps 3 to 6 (see [JMeter Integration Examples](41-jmeter-integration-examples.md)).
+The wrapper scripts [run-perfmon-test.sh](/samples/run-perfmon-test.sh) and [run-perfmon-test.ps1](/samples/run-perfmon-test.ps1) automate steps 3 to 6 (see [Set up JMeter for Perfmon](00b-jmeter-setup.md#the-wrapper-scripts)).
 
 ## Health checks
 

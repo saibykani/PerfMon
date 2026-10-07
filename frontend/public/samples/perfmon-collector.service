@@ -1,0 +1,32 @@
+# systemd unit for the Perfmon Collector (Linux).
+#   sudo useradd --system --no-create-home perfmon
+#   sudo mkdir -p /opt/perfmon && sudo cp collector.mjs /opt/perfmon/
+#   sudo cp perfmon-collector.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now perfmon-collector
+#   journalctl -u perfmon-collector -f
+# Put the API key in /etc/perfmon/collector.env (chmod 600) instead of this file:
+#   PERFMON_API_KEY=pmk_xxxxxxxx_xxxxxxxxxxxxxxxx
+[Unit]
+Description=Perfmon Collector (server metrics for performance tests)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=perfmon
+Environment=PERFMON_URL=http://perfmon.example.com:8080
+Environment=PERFMON_PROJECT=payments
+Environment=PERFMON_ENV=Performance
+Environment=PERFMON_ROLE=app
+Environment=INTERVAL_SEC=5
+EnvironmentFile=/etc/perfmon/collector.env
+ExecStart=/usr/bin/node /opt/perfmon/collector.mjs
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

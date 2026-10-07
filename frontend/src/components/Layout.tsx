@@ -5,6 +5,7 @@ import { Bell, LogOut, Menu, Moon, Search, Sun } from 'lucide-react';
 import { NAV } from './nav';
 import { Logo } from './Logo';
 import { CommandPalette } from './CommandPalette';
+import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { useAuth } from '@/stores/auth';
 import { useUi } from '@/stores/ui';
 import { api } from '@/services/api';
@@ -49,6 +50,7 @@ function Notifications() {
 
 export function Layout() {
   const { user, logout, setUser } = useAuth();
+  const [pwOpen, setPwOpen] = useState(false);
   const { theme, toggleTheme, sidebarOpen, setSidebar } = useUi();
   const nav = useNavigate();
   const loc = useLocation();
@@ -93,7 +95,8 @@ export function Layout() {
           <button className="btn btn-ghost icon-btn" onClick={toggleTheme} title="Toggle light/dark theme" aria-label="Toggle theme">
             {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
           </button>
-          <div className="avatar" title={`${user?.name} · ${user?.roles.join(', ')}`}>{user?.name?.split(' ').map((s) => s[0]).slice(0, 2).join('')}</div>
+          <button className="avatar avatar-btn" title={`${user?.name} · ${user?.roles.join(', ')} — change password`} aria-label="Change password" onClick={() => setPwOpen(true)}>{user?.name?.split(' ').map((s) => s[0]).slice(0, 2).join('')}</button>
+          <ChangePasswordDialog open={pwOpen} onClose={() => setPwOpen(false)} />
           <button className="btn btn-ghost icon-btn" title="Log out" aria-label="Log out" onClick={async () => { await logout(); nav('/login'); }}>
             <LogOut size={15} />
           </button>
