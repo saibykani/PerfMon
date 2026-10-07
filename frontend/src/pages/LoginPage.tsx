@@ -16,7 +16,7 @@ function explain(err: unknown): string {
     if (err.status === 401) return 'That email and password don’t match. Try again or reset your password.';
     if (err.status === 423) return err.message;
     if (err.status === 429) return 'Too many attempts — please wait a minute and try again.';
-    if (err.status === 404 || err.status === 405 || err.code === 'HTTP_ERROR' || err.status >= 502)
+    if (err.status === 404 || err.status === 405 || err.code === 'HTTP_ERROR' || err.code === 'TIMEOUT' || err.status >= 502)
       return `The Perfmon API isn’t reachable at ${API_BASE || window.location.origin}/api/v1. Check that the backend is running.`;
     return err.message;
   }
@@ -33,95 +33,147 @@ const PALETTE = {
   light: [[124, 58, 237], [59, 130, 246], [13, 148, 136], [219, 39, 119]],
 };
 
+/** True when the browser renders without GPU acceleration or the device is low-end. */
+function detectLowPower() {
+  try {
+    if ((navigator.hardwareConcurrency ?? 8) <= 2) return true;
+    const gl = document.createElement('canvas').getContext('webgl');
+    if (!gl) return true;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return /swiftshader|llvmpipe|software|basic render/i.test(renderer);
+  } catch {
+    return false;
+  }
+}
+
 function Signal({ ctl, theme }: { ctl: MutableRefObject<SignalCtl>; theme: 'light' | 'dark' }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current!;
-    const ctx = c.getContext('2d')!;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    let W = 0, H = 0, raf = 0;
+    const ctx = c.getContext('2d', { alpha: true })!;
+    // Performance budget: capped resolution + frame rate, cached gradients, sprite particles.
+    const dpr = 1; // waves are soft; 1x keeps raster cost low on machines without GPU acceleration
+    const RIBBONS = 16;
+    let W = 0, H = 0, raf = 0, last = 0;
+    let gradKey = '';
     const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999 };
-    const resize = () => { W = c.clientWidth; H = c.clientHeight; c.width = W * dpr; c.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); };
+    const pal = PALETTE[theme];
+
+    // Pre-rendered glow sprites for particles (drawImage is far cheaper than per-frame radial gradients)
+    const makeSprite = (rgb: string) => {
+      const sc = document.createElement('canvas');
+      sc.width = sc.height = 24;
+      const g = sc.getContext('2d')!;
+      const rg = g.createRadialGradient(12, 12, 0, 12, 12, 12);
+      rg.addColorStop(0, `rgba(${rgb},1)`); rg.addColorStop(0.25, `rgba(${rgb},0.5)`); rg.addColorStop(1, `rgba(${rgb},0)`);
+      g.fillStyle = rg; g.fillRect(0, 0, 24, 24);
+      return sc;
+    };
+    const sprite = makeSprite(theme === 'dark' ? '220,215,255' : '99,102,241');
+    const spriteOk = makeSprite('16,185,129');
+
+    // Solid color per ribbon (cycling the palette) — far cheaper to rasterize than gradient strokes.
+    let colors: string[] = [];
+    const buildGrads = (green: number, flash: number) => {
+      const key = `${green.toFixed(1)}|${flash.toFixed(1)}`;
+      if (key === gradKey) return;
+      gradKey = key;
+      colors = [];
+      for (let i = 0; i < RIBBONS; i++) {
+        const k = i / RIBBONS;
+        const [r, gg, b] = pal[i % pal.length];
+        const alpha = (theme === 'dark' ? 0.42 : 0.34) * (0.35 + 0.65 * Math.sin(k * Math.PI)) + flash * 0.3;
+        const R = Math.round(r + (16 - r) * green + (239 - r) * flash * 0.8);
+        const G = Math.round((gg + (185 - gg) * green) * (1 - flash * 0.7));
+        const B = Math.round((b + (129 - b) * green) * (1 - flash * 0.7));
+        colors.push(`rgba(${R},${G},${B},${Math.min(1, alpha).toFixed(3)})`);
+      }
+    };
+    const resize = () => {
+      W = c.clientWidth; H = c.clientHeight; top = c.getBoundingClientRect().top;
+      c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      gradKey = '';
+    };
+    let top = 0;
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(c);
-    const onMove = (e: MouseEvent) => { mouse.tx = e.clientX; mouse.ty = e.clientY; };
+    const onMove = (e: MouseEvent) => { mouse.tx = e.clientX; mouse.ty = e.clientY - top; };
     const onLeave = () => { mouse.tx = -9999; mouse.ty = -9999; };
-    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mousemove', onMove, { passive: true });
     document.addEventListener('mouseleave', onLeave);
 
-    const RIBBONS = 24;
-    const sparks = Array.from({ length: 26 }, (_, i) => ({ r: i % RIBBONS, u: Math.random(), v: 0.0006 + Math.random() * 0.0016 }));
-    let t = 0, energy = 0, amp = 1, flash = 0, speed = 1, green = 0;
-    let lastPulse = 0;
+    const sparks = Array.from({ length: 16 }, (_, i) => ({ r: i % RIBBONS, u: Math.random(), v: 0.0008 + Math.random() * 0.0016 }));
+    let t = 0, energy = 0, amp = 1, flash = 0, speed = 1, green = 0, lastPulse = 0;
     ctl.current.pulse = () => { energy = Math.min(1, energy + 0.22); lastPulse = performance.now(); };
 
-    const pal = PALETTE[theme];
     const yAt = (i: number, x: number) => {
       const nx = x / W;
-      const base = H * 0.56 + (i - RIBBONS / 2) * (H * 0.011);
-      const a = H * 0.13 * amp * (1 + energy * 0.9);
-      const w = Math.sin(nx * 5.2 + t * 0.9 + i * 0.16) * 0.55 + Math.sin(nx * 9.5 - t * 1.3 + i * 0.09) * 0.28 + Math.sin(nx * 2.1 + t * 0.4 - i * 0.05) * 0.5;
-      let y = base + a * w * (0.65 + 0.35 * Math.sin(i * 0.4 + t * 0.2));
-      // cursor bends the field
+      const base = H * 0.52 + (i - RIBBONS / 2) * (H * 0.026);
+      const a = H * 0.22 * amp * (1 + energy * 0.9);
+      const w = Math.sin(nx * 5.2 + t * 0.9 + i * 0.22) * 0.55 + Math.sin(nx * 9.5 - t * 1.3 + i * 0.13) * 0.28 + Math.sin(nx * 2.1 + t * 0.4 - i * 0.07) * 0.5;
+      let y = base + a * w * (0.65 + 0.35 * Math.sin(i * 0.55 + t * 0.2));
       const dx = x - mouse.x, dy = y - mouse.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < 90000) y += 64 * Math.tanh(dy / 38) * Math.exp(-(dx * dx) / 22000) * Math.exp(-(dy * dy) / 30000) * amp;
+      if (dx * dx + dy * dy < 90000) y += 64 * Math.tanh(dy / 38) * Math.exp(-(dx * dx) / 22000) * Math.exp(-(dy * dy) / 30000) * amp;
       return y;
     };
 
-    const frame = () => {
+    const draw = () => {
       const mode = ctl.current.mode;
-      const targetSpeed = mode === 'busy' ? 3.2 : 1;
-      speed += (targetSpeed - speed) * 0.05;
-      amp += ((mode === 'success' ? 0.02 : 1) - amp) * (mode === 'success' ? 0.06 : 0.04);
-      green += ((mode === 'success' ? 1 : 0) - green) * 0.05;
+      speed += ((mode === 'busy' ? 3.2 : 1) - speed) * 0.08;
+      amp += ((mode === 'success' ? 0.02 : 1) - amp) * (mode === 'success' ? 0.09 : 0.06);
+      green += ((mode === 'success' ? 1 : 0) - green) * 0.08;
       if (mode === 'error' && flash < 0.05) flash = 1;
-      flash *= 0.94;
-      energy *= performance.now() - lastPulse > 120 ? 0.965 : 1;
-      t += 0.006 * speed;
-      mouse.x += (mouse.tx - mouse.x) * 0.12; mouse.y += (mouse.ty - mouse.y) * 0.12;
+      flash *= 0.9;
+      if (flash < 0.02) flash = 0;
+      if (performance.now() - lastPulse > 120) energy *= 0.95;
+      t += 0.009 * speed;
+      mouse.x += (mouse.tx - mouse.x) * 0.18; mouse.y += (mouse.ty - mouse.y) * 0.18;
 
+      buildGrads(green, flash);
       ctx.clearRect(0, 0, W, H);
-      ctx.globalCompositeOperation = theme === 'dark' ? 'lighter' : 'source-over';
-      const step = Math.max(10, W / 110);
+      const step = Math.max(18, W / 64);
       for (let i = 0; i < RIBBONS; i++) {
-        const g = ctx.createLinearGradient(0, 0, W, 0);
-        const k = i / RIBBONS;
-        pal.forEach((col, j) => {
-          const [r, gg, b] = col;
-          const mix = (v: number, to: number) => Math.round(v + (to - v) * green);
-          const rr = mix(r, 16), g2 = mix(gg, 185), bb = mix(b, 129);
-          const rr2 = Math.round(rr + (255 - rr) * flash * 0.0), alpha = (theme === 'dark' ? 0.34 : 0.3) * (0.35 + 0.65 * Math.sin(k * Math.PI)) + flash * 0.3;
-          g.addColorStop(j / (pal.length - 1), `rgba(${flash > 0.05 ? Math.round(rr2 + (239 - rr2) * flash) : rr2},${Math.round(g2 * (1 - flash * 0.7))},${Math.round(bb * (1 - flash * 0.7))},${alpha})`);
-        });
-        ctx.strokeStyle = g;
-        ctx.lineWidth = i % 6 === 0 ? 2 : 1.1;
+        ctx.strokeStyle = colors[i];
+        ctx.lineWidth = i % 5 === 0 ? 2 : 1.1;
         ctx.beginPath();
-        for (let x = -step; x <= W + step; x += step) {
-          const y = yAt(i, x);
-          if (x <= -step) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
+        ctx.moveTo(-step, yAt(i, -step));
+        for (let x = 0; x <= W + step; x += step) ctx.lineTo(x, yAt(i, x));
         ctx.stroke();
       }
-      // light sparks travelling along ribbons
+      const spr = green > 0.5 ? spriteOk : sprite;
       for (const s of sparks) {
         s.u += s.v * speed * (1 + energy * 2);
-        if (s.u > 1.02) { s.u = -0.02; s.r = Math.floor(Math.random() * RIBBONS); }
+        if (s.u > 1.02) { s.u = -0.02; s.r = (Math.random() * RIBBONS) | 0; }
         const x = s.u * W, y = yAt(s.r, x);
-        const rad = 1.3 + energy * 1.2;
-        const grd = ctx.createRadialGradient(x, y, 0, x, y, rad * 4);
-        const col = green > 0.5 ? '16,185,129' : theme === 'dark' ? '220,215,255' : '99,102,241';
-        grd.addColorStop(0, `rgba(${col},${theme === 'dark' ? 1 : 0.85})`);
-        grd.addColorStop(0.25, `rgba(${col},${theme === 'dark' ? 0.55 : 0.35})`);
-        grd.addColorStop(1, `rgba(${col},0)`);
-        ctx.fillStyle = grd;
-        ctx.beginPath(); ctx.arc(x, y, rad * 4, 0, Math.PI * 2); ctx.fill();
+        const size = 9 + energy * 6;
+        ctx.drawImage(spr, x - size / 2, y - size / 2, size, size);
       }
-      raf = requestAnimationFrame(frame);
     };
-    if (reducedMotion()) { t = 1.3; frame(); cancelAnimationFrame(raf); }
-    else frame();
+
+    // Adaptive quality: software rendering (no GPU) or a struggling browser gets a low-power mode.
+    let lowPower = detectLowPower();
+    let slowFrames = 0;
+    const loop = (now: number) => {
+      raf = requestAnimationFrame(loop);
+      const idle = ctl.current.mode === 'idle' && energy < 0.02 && Math.abs(mouse.tx - mouse.x) < 1 && flash === 0;
+      const budget = lowPower ? (idle ? 125 : 60) : idle ? 80 : 33;
+      const gap = now - last;
+      if (gap < budget) return;
+      if (last && !lowPower) {
+        slowFrames = gap > budget * 2.5 ? slowFrames + 1 : Math.max(0, slowFrames - 1);
+        if (slowFrames > 12) lowPower = true;
+      }
+      last = now;
+      const t0 = performance.now();
+      draw();
+      if (!lowPower && performance.now() - t0 > 12) slowFrames += 2;
+    };
+    if (reducedMotion()) { t = 1.3; draw(); }
+    else raf = requestAnimationFrame(loop);
     return () => { cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener('mousemove', onMove); document.removeEventListener('mouseleave', onLeave); };
   }, [theme, ctl]);
   return <canvas ref={ref} className="signal" aria-hidden="true" />;
@@ -131,7 +183,7 @@ function Signal({ ctl, theme }: { ctl: MutableRefObject<SignalCtl>; theme: 'ligh
 
 function Shell({ children, ctl }: { children: ReactNode; ctl: MutableRefObject<SignalCtl> }) {
   const { theme, toggleTheme } = useUi();
-  const health = useQuery({ queryKey: ['health'], queryFn: () => api.get<{ status: string }>('/health'), retry: false, refetchInterval: 30000 });
+  const health = useQuery({ queryKey: ['health'], queryFn: () => api.get<{ status: string }>('/health'), retry: false, refetchInterval: 30000, refetchOnWindowFocus: false });
   const up = health.data?.status === 'UP';
   return (
     <div className="auth">
@@ -175,7 +227,7 @@ export function LoginPage() {
       await login(email.trim(), password);
       try { localStorage.setItem('perfmon.lastEmail', email.trim()); } catch { /* ignore */ }
       setState('done'); ctl.current.mode = 'success';
-      setTimeout(() => nav(loc.state?.from ?? '/', { replace: true }), reducedMotion() ? 0 : 1100);
+      setTimeout(() => nav(loc.state?.from ?? '/', { replace: true }), reducedMotion() ? 0 : 450);
     } catch (err) {
       setError(explain(err)); setErrKey((k) => k + 1); setState('idle');
       ctl.current.mode = 'error'; setTimeout(() => (ctl.current.mode = 'idle'), 500);

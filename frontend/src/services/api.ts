@@ -41,7 +41,19 @@ async function request<T>(method: string, path: string, body?: unknown, opts: { 
   let payload: BodyInit | undefined;
   if (body instanceof FormData) payload = body;
   else if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
-  const res = await fetch(`${API_BASE}/api/v1${path}${qs(opts.query)}`, { method, headers, body: payload });
+  // Abort hung requests (e.g. backend down behind a proxy) instead of waiting indefinitely.
+  const ctrl = new AbortController();
+  const timeoutMs = body instanceof FormData ? 10 * 60_000 : opts.raw ? 120_000 : path === '/health' ? 6_000 : 25_000;
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/v1${path}${qs(opts.query)}`, { method, headers, body: payload, signal: ctrl.signal });
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw new ApiError(504, 'TIMEOUT', `The Perfmon API did not respond within ${Math.round(timeoutMs / 1000)}s. The backend may be down or overloaded.`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (res.status === 401 && !path.startsWith('/auth/login')) onUnauthorized?.();
   if (!res.ok) {
     let err: ApiErrorBody | null = null;

@@ -21,7 +21,7 @@ export async function bootstrap(log: (m: string) => void = console.log) {
       log('[bootstrap] No users exist and DEMO_ADMIN_PASSWORD is not set — set it to create the initial administrator.');
     } else {
       const u = await one(`INSERT INTO users (organization_id, email, name, password_hash) VALUES ($1,$2,'Perfmon Administrator',$3) RETURNING id`,
-        [org.id, config.demoAdminEmail, await bcrypt.hash(config.demoAdminPassword, 12)]);
+        [org.id, config.demoAdminEmail, await bcrypt.hash(config.demoAdminPassword, 10)]);
       await query(`INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name = 'SUPER_ADMIN'`, [u.id]);
       log(`[bootstrap] Created initial administrator ${config.demoAdminEmail} (password from DEMO_ADMIN_PASSWORD)`);
     }

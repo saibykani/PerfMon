@@ -34,6 +34,8 @@ export async function authRoutes(app: FastifyInstance) {
       return fail('bad_password');
     }
     await query(`UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = now() WHERE id = $1`, [u.id]);
+    // Transparently re-hash older, slower hashes (cost > 10) to keep logins fast.
+    if (bcrypt.getRounds(u.password_hash) > 10) query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [u.id, await bcrypt.hash(password, 10)]).catch(() => undefined);
     const { token, expiresAt } = signToken(u.id, u.organization_id);
     req.principal = { kind: 'user', id: u.id, orgId: u.organization_id, email: u.email, name: u.name, roles: [], permissions: new Set() };
     await audit(req, { action: 'auth.login', resourceType: 'user', resourceId: u.id });
@@ -74,7 +76,7 @@ export async function authRoutes(app: FastifyInstance) {
     const p = principalOf(req);
     const u = await one(`SELECT password_hash FROM users WHERE id = $1`, [p.id]);
     if (!u || !(await bcrypt.compare(req.body.currentPassword, u.password_hash))) throw badRequest('Current password is incorrect');
-    await query(`UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1`, [p.id, await bcrypt.hash(req.body.newPassword, 12)]);
+    await query(`UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1`, [p.id, await bcrypt.hash(req.body.newPassword, 10)]);
     await audit(req, { action: 'auth.change_password', resourceType: 'user', resourceId: p.id });
     return { ok: true };
   });
@@ -101,7 +103,7 @@ export async function authRoutes(app: FastifyInstance) {
   }, async (req) => {
     const u = await one(`SELECT id FROM users WHERE password_reset_token_hash = $1 AND password_reset_expires_at > now()`, [sha256(req.body.token)]);
     if (!u) throw badRequest('Reset link is invalid or has expired');
-    await query(`UPDATE users SET password_hash = $2, password_reset_token_hash = NULL, password_reset_expires_at = NULL, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE id = $1`, [u.id, await bcrypt.hash(req.body.password, 12)]);
+    await query(`UPDATE users SET password_hash = $2, password_reset_token_hash = NULL, password_reset_expires_at = NULL, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE id = $1`, [u.id, await bcrypt.hash(req.body.password, 10)]);
     await audit(null, { action: 'auth.reset_password', resourceType: 'user', resourceId: u.id });
     return { ok: true };
   });

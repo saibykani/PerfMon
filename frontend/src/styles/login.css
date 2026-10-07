@@ -4,23 +4,23 @@
    Motion respects prefers-reduced-motion.
 =================================================================== */
 .auth {
-  --ink: #0d1324; --ink-2: #4b5468; --ink-3: #8a92a5; --field: rgba(255,255,255,.62); --field-b: rgba(13,19,36,.10);
+  --ink: #0d1324; --ink-2: #4b5468; --ink-3: #8a92a5; --field: rgba(255,255,255,.88); --field-b: rgba(13,19,36,.10);
   --glass: rgba(255,255,255,.45); --bg: #f7f8fc; --accent: #6d5dfc; --err: #d93a4a;
   position: fixed; inset: 0; overflow: hidden; display: grid; place-items: center; padding: 20px;
   background: radial-gradient(120% 80% at 50% 0%, #ffffff 0%, var(--bg) 60%, #eef1f8 100%);
   color: var(--ink); font-family: 'Inter', var(--font); isolation: isolate;
 }
 :root[data-theme='dark'] .auth {
-  --ink: #f2f4fa; --ink-2: #b3bacb; --ink-3: #7d8598; --field: rgba(255,255,255,.06); --field-b: rgba(255,255,255,.12);
+  --ink: #f2f4fa; --ink-2: #b3bacb; --ink-3: #7d8598; --field: rgba(16,18,30,.82); --field-b: rgba(255,255,255,.12);
   --glass: rgba(10,12,22,.35); --bg: #05060b; --accent: #a89bff; --err: #ff7a86;
   background: radial-gradient(120% 80% at 50% 0%, #0f1122 0%, var(--bg) 60%, #000 100%);
 }
-.signal { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; display: block; }
+.signal { position: absolute; left: 0; right: 0; top: 30%; height: 60%; z-index: -2; width: 100%; display: block; contain: strict; }
 .vignette { position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background: radial-gradient(30% 44% at 50% 50%, var(--bg) 0%, color-mix(in srgb, var(--bg) 80%, transparent) 55%, transparent 100%); opacity: .95; }
-.grain { position: absolute; inset: -50%; z-index: -1; pointer-events: none; opacity: .05;
+.grain { position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: .05;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  animation: grain 1.2s steps(6) infinite; }
+}
 @keyframes grain { 20% { transform: translate(-4%, 3%); } 40% { transform: translate(3%, -2%); } 60% { transform: translate(-2%, -4%); } 80% { transform: translate(4%, 2%); } }
 
 /* ---------------- form ---------------- */
@@ -32,7 +32,8 @@
 
 .mark { display: inline-grid; place-items: center; position: relative; margin-bottom: 22px; }
 .mark::before { content: ''; position: absolute; inset: -18px; border-radius: 50%; background: conic-gradient(from 0deg, #8b5cf6, #3b82f6, #14b8a6, #ec4899, #8b5cf6);
-  filter: blur(22px); opacity: .45; animation: spin 8s linear infinite; }
+  filter: blur(22px); opacity: .45; animation: glow 4s ease-in-out infinite; will-change: opacity; }
+@keyframes glow { 50% { opacity: .22; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .mark svg { position: relative; filter: drop-shadow(0 10px 24px rgba(91, 76, 255, .35)); }
 .logo-anim .logo-wave { stroke-dasharray: 90; stroke-dashoffset: 90; animation: logo-draw 1.4s .5s cubic-bezier(.65,0,.35,1) forwards; }
@@ -44,14 +45,14 @@
 .title { font-family: 'Plus Jakarta Sans', 'Inter', sans-serif; font-weight: 700; font-size: 40px; letter-spacing: -.035em; line-height: 1.05; margin: 0; }
 .title em { font-family: 'Instrument Serif', Georgia, serif; font-style: italic; font-weight: 400; letter-spacing: -.01em; font-size: 1.12em;
   background: linear-gradient(100deg, #7c3aed, #3b82f6 35%, #0ea5a4 65%, #db2777); background-size: 220% 100%;
-  -webkit-background-clip: text; background-clip: text; color: transparent; animation: flow 7s ease-in-out infinite; padding-right: .06em; }
+  -webkit-background-clip: text; background-clip: text; color: transparent; padding-right: .06em; }
 :root[data-theme='dark'] .title em { background-image: linear-gradient(100deg, #c4b5fd, #93c5fd 35%, #5eead4 65%, #f9a8d4); background-size: 220% 100%; }
 @keyframes flow { 50% { background-position: 100% 0; } }
 .lede { color: var(--ink-2); font-size: 14.5px; margin: 12px 0 30px; }
 
 .inputs { display: grid; gap: 12px; text-align: left; }
 .fx { position: relative; border-radius: 16px; background: var(--field); border: 1px solid var(--field-b);
-  backdrop-filter: blur(16px) saturate(150%); -webkit-backdrop-filter: blur(16px) saturate(150%); transition: border-color .25s, box-shadow .25s, transform .25s; }
+   transition: border-color .25s, box-shadow .25s, transform .25s; }
 .fx::after { content: ''; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none; opacity: 0; transition: opacity .3s;
   background: linear-gradient(120deg, #8b5cf6, #3b82f6, #14b8a6, #ec4899); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
 .fx:focus-within { box-shadow: 0 10px 40px -12px rgba(99, 102, 241, .45); transform: translateY(-1px); }
@@ -92,7 +93,7 @@
 
 .msg { margin: 0 0 14px; padding: 11px 14px; border-radius: 14px; font-size: 13px; line-height: 1.45; text-align: left; display: flex; gap: 10px; align-items: flex-start;
   color: var(--err); background: color-mix(in srgb, var(--err) 9%, transparent); border: 1px solid color-mix(in srgb, var(--err) 28%, transparent);
-  animation: shake .45s cubic-bezier(.36,.07,.19,.97) both; backdrop-filter: blur(10px); }
+  animation: shake .45s cubic-bezier(.36,.07,.19,.97) both; }
 .msg svg { flex: none; margin-top: 1px; }
 .msg.okmsg { color: #047857; background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.3); animation: rise .4s both; }
 :root[data-theme='dark'] .msg.okmsg { color: #6ee7b7; }
@@ -104,7 +105,7 @@
 .foot a, .foot button { color: var(--ink-3); text-decoration: none; background: none; border: 0; cursor: pointer; font-size: 12px; display: inline-flex; gap: 6px; align-items: center; }
 .foot a:hover, .foot button:hover { color: var(--ink); }
 .status { display: inline-flex; align-items: center; gap: 7px; }
-.status i { width: 7px; height: 7px; border-radius: 50%; background: #10b981; box-shadow: 0 0 0 0 rgba(16,185,129,.6); animation: ring 2s infinite; }
+.status i { width: 7px; height: 7px; border-radius: 50%; background: #10b981; }
 .status.down i { background: #ef4444; animation: none; }
 @keyframes ring { 70% { box-shadow: 0 0 0 8px rgba(16,185,129,0); } 100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); } }
 
