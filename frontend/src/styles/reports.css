@@ -1,0 +1,46 @@
+/* Reports module — colours come only from theme variables. */
+
+.rp-status { display: inline-flex; align-items: center; gap: 4px; }
+.rp-title-cell { display: flex; flex-direction: column; gap: 1px; min-width: 220px; }
+.rp-title-cell a { color: var(--text); text-decoration: none; }
+.rp-title-cell a:hover { color: var(--accent); text-decoration: underline; }
+.rp-subject { display: flex; flex-direction: column; gap: 1px; }
+.rp-subject a { color: var(--text); }
+.rp-subject a:hover { color: var(--accent); }
+
+.rp-downloads { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.rp-downloads.compact { gap: 0; }
+.rp-downloads .rp-fmt { padding: 0 6px; height: 24px; font-size: 11px; color: var(--text-2); }
+.rp-downloads .rp-fmt:hover:not(:disabled) { color: var(--accent); }
+.rp-downloads .btn { gap: 4px; }
+
+.rp-new .seg { flex-wrap: wrap; }
+.rp-picked { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.rp-picked .btn { margin-left: auto; }
+
+.rp-back { display: inline-flex; align-items: center; gap: 3px; color: var(--text-2); text-decoration: none; }
+.rp-back:hover { color: var(--accent); }
+
+.rp-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 12px; align-items: start; }
+.rp-meta { position: sticky; top: 12px; }
+.rp-meta .kv { grid-template-columns: 1fr; }
+.rp-toc { display: flex; flex-direction: column; gap: 3px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-2); }
+.rp-result { font-weight: 600; }
+.rp-t-pass { color: var(--pass); }
+.rp-t-warn { color: var(--warn); }
+.rp-t-fail { color: var(--fail); }
+.rp-t-none { color: var(--text-2); }
+
+.rp-preview-card { overflow: hidden; min-height: 320px; }
+/* The report document itself is a white "paper" page (print look) regardless of app theme. */
+.rp-frame { display: block; width: 100%; height: calc(100vh - 190px); min-height: 560px; border: 0; background: var(--surface); }
+.rp-pending, .rp-failed { display: flex; gap: 14px; align-items: flex-start; padding: 28px 24px; color: var(--text); }
+.rp-pending svg { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+.rp-failed { flex-direction: column; gap: 8px; border-left: 3px solid var(--fail); }
+.rp-failed b { color: var(--fail); }
+
+@media (max-width: 980px) {
+  .rp-layout { grid-template-columns: 1fr; }
+  .rp-meta { position: static; }
+  .rp-frame { height: 75vh; }
+}
