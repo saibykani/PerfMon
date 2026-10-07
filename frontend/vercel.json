@@ -6,11 +6,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://powerful-helpful-sec-approx.trycloudflare.com/api/:path*"
+      "destination": "https://perfmon-api.onrender.com/api/:path*"
     },
     {
       "source": "/report-content/:path*",
-      "destination": "https://powerful-helpful-sec-approx.trycloudflare.com/report-content/:path*"
+      "destination": "https://perfmon-api.onrender.com/report-content/:path*"
     },
     {
       "source": "/((?!assets/|brand/|docs/|samples/|favicon|logo.svg|apple-touch-icon|icon-512).*)",
