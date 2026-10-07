@@ -1,13 +1,16 @@
 import os from 'node:os';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
-import si from 'systeminformation';
+import { Worker } from 'node:worker_threads';
+import { createRequire } from 'node:module';
+
+const require_ = createRequire(import.meta.url);
 
 /**
  * Live metrics of the host running the Perfmon backend.
  *
  * Fast metrics (CPU per core, memory, event loop, process) come from node:os every 2s.
  * Slow metrics (disks, network, processes, static hardware info) come from systeminformation
- * on a separate, non-overlapping loop — on Windows these shell out and can take seconds.
+ * in a worker thread on a separate, non-overlapping loop — on Windows these shell out and can take seconds.
  * Sampling starts on first request and stops after IDLE_STOP_MS without readers.
  */
 
@@ -62,6 +65,9 @@ class HostMonitor {
   private staticInfo: Static;
   private staticDetailed = false;
   private slowTick = 0;
+  private worker: Worker | null = null;
+  private seq = 0;
+  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private slow: Slow = { disks: [], network: [], processes: null, swap: null, temperature: null, updatedAt: null };
 
   constructor() {
@@ -109,6 +115,7 @@ class HostMonitor {
     this.fastTimer = this.slowTimer = null;
     this.prevCpu = null;
     this.loop.disable();
+    void this.worker?.terminate(); // frees the sampler's memory while nobody is watching
   }
 
   private sampleFast() {
@@ -162,30 +169,59 @@ class HostMonitor {
     this.slowTimer.unref();
   }
 
-  private async loadStatic(settle: <T>(p: Promise<T>) => Promise<T | null>) {
-    const [cpu, osi, gfx] = await Promise.all([settle(si.cpu()), settle(si.osInfo()), settle(si.graphics())]);
+  /** Runs a systeminformation call set in the sampler thread. */
+  private call<T>(kind: 'static' | 'slow', args: Record<string, unknown> = {}): Promise<T> {
+    if (!this.worker) {
+      // systeminformation parses large command outputs synchronously (≈1s for the Windows
+      // process table); a worker thread keeps that off the event loop that serves the API.
+      this.worker = new Worker(SAMPLER_SOURCE, { eval: true, workerData: { siPath: require_.resolve('systeminformation') } });
+      this.worker.unref();
+      this.worker.on('message', (m: { id: number; result?: unknown; error?: string }) => {
+        const p = this.pending.get(m.id);
+        this.pending.delete(m.id);
+        if (p) m.error ? p.reject(new Error(m.error)) : p.resolve(m.result);
+      });
+      this.worker.on('error', () => this.resetWorker());
+      this.worker.on('exit', () => this.resetWorker());
+    }
+    const id = ++this.seq;
+    return new Promise<T>((resolve, reject) => {
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      this.worker!.postMessage({ id, kind, ...args });
+    });
+  }
+
+  private resetWorker() {
+    this.worker = null;
+    for (const p of this.pending.values()) p.reject(new Error('sampler stopped'));
+    this.pending.clear();
+  }
+
+  private async loadStatic() {
+    const r = await this.call<{ cpu: any; osi: any; gpu: string[] | null }>('static').catch(() => null);
+    if (!r) return;
+    const { cpu, osi, gpu } = r;
     if (cpu) Object.assign(this.staticInfo, { cpuModel: `${cpu.manufacturer} ${cpu.brand}`.trim(), cpuVendor: cpu.vendor, physicalCores: cpu.physicalCores, logicalCores: cpu.cores, speedGHz: cpu.speedMax || cpu.speed || this.staticInfo.speedGHz });
     if (osi) Object.assign(this.staticInfo, { distro: osi.distro, release: osi.release, kernel: osi.kernel, arch: osi.arch, hostname: osi.hostname || this.staticInfo.hostname });
-    if (gfx) this.staticInfo.gpu = gfx.controllers.map((c) => c.model).filter(Boolean);
+    if (gpu) this.staticInfo.gpu = gpu;
   }
 
   private async sampleSlow() {
-    const settle = <T>(p: Promise<T>) => p.then((v) => v, () => null);
     if (!this.staticDetailed) {
       this.staticDetailed = true;
-      void this.loadStatic(settle); // hardware details are slow on Windows; never block live samples on them
+      void this.loadStatic(); // hardware details are slow on Windows; never block live samples on them
     }
-    // the process table is the most expensive call (parsing hundreds of rows): refresh it every other cycle
+    // the process table is the most expensive call: refresh it every other cycle
     const wantProcs = this.slowTick++ % 2 === 0;
-    const [fs, net, procs, mem, temp] = await Promise.all([settle(si.fsSize()), settle(si.networkStats('*')), wantProcs ? settle(si.processes()) : null, settle(si.mem()), settle(si.cpuTemperature())]);
+    const { fs, net, procs, mem, temp } = await this.call<any>('slow', { wantProcs });
     const now = Date.now();
     if (fs) {
       const seen = new Set<string>();
-      this.slow.disks = fs.filter((d) => d.size > 0 && !seen.has(d.mount) && seen.add(d.mount))
+      this.slow.disks = (fs as any[]).filter((d) => d.size > 0 && !seen.has(d.mount) && seen.add(d.mount))
         .map((d) => ({ mount: d.mount, fs: d.fs, type: d.type, size: d.size, used: d.used, available: d.available, pct: round(d.use) }));
     }
     if (net) {
-      this.slow.network = net.map((n) => {
+      this.slow.network = (net as any[]).map((n) => {
         const prev = this.prevNet.get(n.iface);
         this.prevNet.set(n.iface, { t: now, rx: n.rx_bytes, tx: n.tx_bytes });
         const dt = prev ? (now - prev.t) / 1000 : 0;
@@ -200,10 +236,8 @@ class HostMonitor {
       const ncpu = os.cpus().length || 1;
       this.slow.processes = {
         total: procs.all, running: procs.running, blocked: procs.blocked, sleeping: procs.sleeping,
-        top: procs.list.filter((p) => p.pid > 0 && !/idle process/i.test(p.name))
-          .sort((a, b) => b.cpu - a.cpu || b.memRss - a.memRss).slice(0, 12)
-          // Windows reports per-process CPU relative to one core; normalise to the whole machine
-          .map((p) => ({ pid: p.pid, name: p.name, cpu: round(os.platform() === 'win32' ? p.cpu : p.cpu / ncpu), memPct: round(p.mem), rss: p.memRss * 1024 })),
+        // Windows already reports per-process CPU as % of the whole machine; elsewhere it is per core
+        top: (procs.top as any[]).map((p) => ({ pid: p.pid, name: p.name, cpu: round(os.platform() === 'win32' ? p.cpu : p.cpu / ncpu), memPct: round(p.mem), rss: p.memRss * 1024 })),
       };
     }
     if (mem) this.slow.swap = mem.swaptotal > 0 ? { used: mem.swapused, total: mem.swaptotal } : null;
@@ -211,6 +245,28 @@ class HostMonitor {
     this.slow.updatedAt = now;
   }
 }
+
+/** Sampler thread (CommonJS, evaluated in a worker): returns compact results only. */
+const SAMPLER_SOURCE = `
+const { parentPort, workerData } = require('node:worker_threads');
+const si = require(workerData.siPath);
+const settle = (p) => p.then((v) => v, () => null);
+parentPort.on('message', async (m) => {
+  try {
+    if (m.kind === 'static') {
+      const [cpu, osi, gfx] = await Promise.all([settle(si.cpu()), settle(si.osInfo()), settle(si.graphics())]);
+      parentPort.postMessage({ id: m.id, result: { cpu, osi, gpu: gfx ? gfx.controllers.map((c) => c.model).filter(Boolean) : null } });
+      return;
+    }
+    const [fs, net, procs, mem, temp] = await Promise.all([settle(si.fsSize()), settle(si.networkStats('*')), m.wantProcs ? settle(si.processes()) : null, settle(si.mem()), settle(si.cpuTemperature())]);
+    const top = procs ? procs.list.filter((p) => p.pid > 0 && !/idle process/i.test(p.name)).sort((a, b) => b.cpu - a.cpu || b.memRss - a.memRss).slice(0, 12)
+      .map((p) => ({ pid: p.pid, name: p.name, cpu: p.cpu, mem: p.mem, memRss: p.memRss })) : null;
+    parentPort.postMessage({ id: m.id, result: { fs, net, mem, temp, procs: procs ? { all: procs.all, running: procs.running, blocked: procs.blocked, sleeping: procs.sleeping, top } : null } });
+  } catch (e) {
+    parentPort.postMessage({ id: m.id, error: String(e && e.message || e) });
+  }
+});
+`;
 
 const round = (n: number) => Math.round(n * 10) / 10;
 const clampPct = (n: number) => Math.max(0, Math.min(100, n));
