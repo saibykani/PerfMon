@@ -1,0 +1,194 @@
+# Perfmon performance test pipeline for Azure DevOps (YAML pipelines).
+#
+# Copy to azure-pipelines.yml (or a separate pipeline file) in the repository that holds your JMeter test plan.
+#
+# Required variables - recommended: a variable group named "perfmon" (Pipelines -> Library):
+#   PERFMON_URL       Public base URL of the Perfmon backend, e.g. https://perfmon-api.example.com
+#   PERFMON_API_KEY   Perfmon API key (pmk_...) with the "ingest" scope - mark it as SECRET
+# Secret variables are not exposed to scripts automatically; every step below maps them with `env:`.
+#
+# Flow: create run (Run ID) -> JMeter non-GUI with the InfluxDB Backend Listener streaming to
+# /api/v1/ingest/influx/write?runId=<RUN_ID> -> HTML report -> zip + upload (HTML_REPORT) ->
+# upload JTL -> complete run -> poll until analysis finishes -> quality gate on `result`.
+#
+# The test plan's Backend Listener reads the properties passed with -J:
+#   influxdbUrl   = ${__P(perfmon.url)}/api/v1/ingest/influx/write?runId=${__P(perfmon.runId)}
+#   influxdbToken = ${__P(perfmon.apiKey)}
+
+trigger:
+  branches:
+    include: [main]
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: perfmon
+  - name: JMETER_VERSION
+    value: "5.6.3"
+  - name: TEST_PLAN
+    value: perf/payment-load.jmx
+  - name: PERFMON_PROJECT
+    value: payments
+  - name: PERFMON_APPLICATION
+    value: merchant-payments
+  - name: PERFMON_ENVIRONMENT
+    value: Performance
+  - name: PERFMON_TEST
+    value: 200 TPS Payment Load
+  - name: PERFMON_ANALYSIS_TIMEOUT_SEC
+    value: "900"
+  - name: PERFMON_FAIL_ON_INCONCLUSIVE
+    value: "false"
+
+jobs:
+  - job: performance_test
+    displayName: JMeter load test (Perfmon)
+    timeoutInMinutes: 120
+    steps:
+      - checkout: self
+
+      - task: JavaToolInstaller@0
+        displayName: Use Java 17
+        inputs:
+          versionSpec: "17"
+          jdkArchitectureOption: x64
+          jdkSourceOption: PreInstalled
+
+      - task: Cache@2
+        displayName: Cache JMeter
+        inputs:
+          key: jmeter | "$(JMETER_VERSION)"
+          path: $(Pipeline.Workspace)/jmeter
+
+      - bash: |
+          set -euo pipefail
+          if [ ! -x "$(Pipeline.Workspace)/jmeter/apache-jmeter-$(JMETER_VERSION)/bin/jmeter" ]; then
+            mkdir -p "$(Pipeline.Workspace)/jmeter"
+            curl -fsSL "https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-$(JMETER_VERSION).tgz" | tar -xz -C "$(Pipeline.Workspace)/jmeter"
+          fi
+          echo "##vso[task.prependpath]$(Pipeline.Workspace)/jmeter/apache-jmeter-$(JMETER_VERSION)/bin"
+        displayName: Install JMeter
+
+      - bash: |
+          set -euo pipefail
+          BODY=$(jq -n \
+            --arg project "$(PERFMON_PROJECT)" \
+            --arg application "$(PERFMON_APPLICATION)" \
+            --arg environment "$(PERFMON_ENVIRONMENT)" \
+            --arg test "$(PERFMON_TEST)" \
+            --arg build "$(Build.BuildNumber)" \
+            --arg branch "$(Build.SourceBranchName)" \
+            --arg commit "$(Build.SourceVersion)" \
+            --arg ciUrl "$(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)" \
+            '{project: $project, application: $application, environment: $environment, test: $test,
+              createTestIfMissing: true, testType: "LOAD",
+              buildNumber: $build, branch: $branch, commit: $commit,
+              triggeredBy: "CI", ciSystem: "azure-devops", ciUrl: $ciUrl}')
+          RUN_ID=$(curl -fsS -X POST "$PERFMON_URL/api/v1/runs" \
+            -H "Authorization: Bearer $PERFMON_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" | jq -r .runId)
+          echo "Perfmon Run ID: $RUN_ID"
+          echo "##vso[task.setvariable variable=RUN_ID]$RUN_ID"
+          echo "##vso[build.addbuildtag]$RUN_ID"
+        displayName: Create Perfmon run
+        name: createRun
+        env:
+          PERFMON_URL: $(PERFMON_URL)
+          PERFMON_API_KEY: $(PERFMON_API_KEY)
+
+      - bash: |
+          set -uo pipefail
+          rm -rf results.jtl report jmeter.log
+          jmeter -n -t "$(TEST_PLAN)" -l results.jtl -j jmeter.log -e -o report \
+            -Jperfmon.url="$PERFMON_URL" -Jperfmon.runId="$(RUN_ID)" -Jperfmon.apiKey="$PERFMON_API_KEY"
+          RC=$?
+          if [ $RC -eq 0 ]; then echo "##vso[task.setvariable variable=RUN_STATUS]COMPLETED"
+          else echo "##vso[task.setvariable variable=RUN_STATUS]FAILED"; echo "##vso[task.logissue type=warning]JMeter exited with code $RC"; fi
+          exit 0
+        displayName: Run JMeter (non-GUI)
+        env:
+          PERFMON_URL: $(PERFMON_URL)
+          PERFMON_API_KEY: $(PERFMON_API_KEY)
+
+      - bash: |
+          set -euo pipefail
+          API="$PERFMON_URL/api/v1/runs/$(RUN_ID)/artifacts"
+          if [ -f report/index.html ]; then
+            (cd report && zip -qr ../report.zip .)
+            curl -fsS -X POST "$API" -H "Authorization: Bearer $PERFMON_API_KEY" \
+              -F kind=HTML_REPORT -F name=jmeter-report -F source=CI -F "file=@report.zip" | jq -r .message
+          else
+            echo "No HTML report generated - skipping"
+          fi
+          if [ -s results.jtl ]; then
+            curl -fsS -X POST "$API" -H "Authorization: Bearer $PERFMON_API_KEY" \
+              -F kind=JTL -F source=CI -F "file=@results.jtl" | jq -r .message
+          fi
+          if [ -f jmeter.log ]; then
+            curl -fsS -X POST "$API" -H "Authorization: Bearer $PERFMON_API_KEY" \
+              -F kind=LOG -F source=CI -F "file=@jmeter.log" > /dev/null
+          fi
+        displayName: Upload HTML report, JTL and log to Perfmon
+        condition: and(always(), ne(variables['RUN_ID'], ''))
+        env:
+          PERFMON_URL: $(PERFMON_URL)
+          PERFMON_API_KEY: $(PERFMON_API_KEY)
+
+      - bash: |
+          set -euo pipefail
+          STATUS="$(RUN_STATUS)"
+          case "$STATUS" in COMPLETED|FAILED) ;; *) STATUS=ABORTED ;; esac
+          curl -fsS -X POST "$PERFMON_URL/api/v1/runs/$(RUN_ID)/complete" \
+            -H "Authorization: Bearer $PERFMON_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"status\":\"$STATUS\"}" | jq '{runId, status}'
+        displayName: Complete Perfmon run
+        condition: and(always(), ne(variables['RUN_ID'], ''))
+        env:
+          PERFMON_URL: $(PERFMON_URL)
+          PERFMON_API_KEY: $(PERFMON_API_KEY)
+
+      - bash: |
+          set -euo pipefail
+          RUN_ID="$(RUN_ID)"
+          DEADLINE=$(( $(date +%s) + $(PERFMON_ANALYSIS_TIMEOUT_SEC) ))
+          while :; do
+            RUN=$(curl -fsS "$PERFMON_URL/api/v1/runs/$RUN_ID" -H "Authorization: Bearer $PERFMON_API_KEY")
+            STATUS=$(jq -r .status <<<"$RUN")
+            case "$STATUS" in COMPLETED|FAILED|ABORTED|CANCELLED) break ;; esac
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "##vso[task.logissue type=error]Perfmon analysis did not finish in time (status $STATUS)"
+              exit 1
+            fi
+            echo "Run $RUN_ID is $STATUS - waiting for analysis..."
+            sleep 10
+          done
+          RESULT=$(jq -r '.result // "NONE"' <<<"$RUN")
+          echo "Perfmon $RUN_ID: status=$STATUS result=$RESULT score=$(jq -r '.performanceScore // "n/a"' <<<"$RUN")"
+          jq -r '.resultBreakdown.reasons // [] | .[] | "  - " + .' <<<"$RUN"
+          curl -fsS "$PERFMON_URL/api/v1/runs/$RUN_ID/summary-text" -H "Authorization: Bearer $PERFMON_API_KEY" || true
+          case "$RESULT" in
+            PASS) echo "Quality gate passed" ;;
+            PASS_WITH_WARNINGS) echo "##vso[task.logissue type=warning]Quality gate passed with warnings" ;;
+            INCONCLUSIVE)
+              if [ "$(PERFMON_FAIL_ON_INCONCLUSIVE)" = "true" ]; then echo "##vso[task.logissue type=error]Result INCONCLUSIVE"; exit 1; fi
+              echo "##vso[task.logissue type=warning]Result INCONCLUSIVE (not enough data for a verdict)" ;;
+            *) echo "##vso[task.logissue type=error]Perfmon quality gate FAILED for $RUN_ID ($RESULT)"; exit 1 ;;
+          esac
+        displayName: Wait for analysis and apply quality gate
+        condition: and(always(), ne(variables['RUN_ID'], ''))
+        env:
+          PERFMON_URL: $(PERFMON_URL)
+          PERFMON_API_KEY: $(PERFMON_API_KEY)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish JMeter outputs
+        condition: always()
+        inputs:
+          targetPath: report
+          artifact: jmeter-report-$(RUN_ID)
+          publishLocation: pipeline

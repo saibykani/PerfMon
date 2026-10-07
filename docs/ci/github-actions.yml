@@ -1,0 +1,206 @@
+# Perfmon performance test pipeline for GitHub Actions.
+#
+# Copy to .github/workflows/performance.yml in the repository that holds your JMeter test plan.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   PERFMON_URL       Public base URL of the Perfmon backend, e.g. https://perfmon-api.example.com
+#                     (no trailing slash, without /api/v1)
+#   PERFMON_API_KEY   Perfmon API key (pmk_...) with the "ingest" scope
+#                     (Platform -> Administration -> API keys, or POST /api/v1/api-keys)
+#
+# Flow: create run (Run ID) -> JMeter non-GUI with the InfluxDB Backend Listener streaming to
+# /api/v1/ingest/influx/write?runId=<RUN_ID> -> HTML report -> zip + upload (HTML_REPORT) ->
+# upload JTL -> complete run -> poll until analysis finishes -> quality gate on `result`.
+#
+# The test plan must contain a Backend Listener (InfluxdbBackendListenerClient) whose parameters read
+# the JMeter properties passed below, for example:
+#   influxdbUrl   = ${__P(perfmon.url)}/api/v1/ingest/influx/write?runId=${__P(perfmon.runId)}
+#   influxdbToken = ${__P(perfmon.apiKey)}
+# See docs/jmeter/perfmon-backend-listener.jmx and docs/user-manual/09-jmeter-integration.md.
+
+name: Performance test (Perfmon)
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_plan:
+        description: JMeter test plan (.jmx) relative to the repository root
+        default: perf/payment-load.jmx
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perfmon-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  JMETER_VERSION: "5.6.3"
+  TEST_PLAN: ${{ github.event.inputs.test_plan || 'perf/payment-load.jmx' }}
+  # Perfmon hierarchy: project key or name, application code or name, environment name or type, test name.
+  PERFMON_PROJECT: payments
+  PERFMON_APPLICATION: merchant-payments
+  PERFMON_ENVIRONMENT: Performance
+  PERFMON_TEST: 200 TPS Payment Load
+  # Quality gate behaviour
+  PERFMON_ANALYSIS_TIMEOUT_SEC: "900"
+  PERFMON_FAIL_ON_INCONCLUSIVE: "false"
+
+jobs:
+  load-test:
+    name: JMeter load test
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PERFMON_URL: ${{ secrets.PERFMON_URL }}
+      PERFMON_API_KEY: ${{ secrets.PERFMON_API_KEY }}
+    steps:
+      - name: Check out test plans
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache JMeter
+        id: cache-jmeter
+        uses: actions/cache@v4
+        with:
+          path: ~/apache-jmeter-${{ env.JMETER_VERSION }}
+          key: jmeter-${{ env.JMETER_VERSION }}
+
+      - name: Install JMeter
+        if: steps.cache-jmeter.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL "https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-${JMETER_VERSION}.tgz" | tar -xz -C "$HOME"
+
+      - name: Add JMeter to PATH
+        run: echo "$HOME/apache-jmeter-${JMETER_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Create Perfmon run
+        id: run
+        run: |
+          set -euo pipefail
+          BODY=$(jq -n \
+            --arg project "$PERFMON_PROJECT" \
+            --arg application "$PERFMON_APPLICATION" \
+            --arg environment "$PERFMON_ENVIRONMENT" \
+            --arg test "$PERFMON_TEST" \
+            --arg build "${{ github.run_number }}" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg commit "${{ github.sha }}" \
+            --arg ciUrl "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{project: $project, application: $application, environment: $environment, test: $test,
+              createTestIfMissing: true, testType: "LOAD",
+              buildNumber: $build, branch: $branch, commit: $commit,
+              triggeredBy: "CI", ciSystem: "github-actions", ciUrl: $ciUrl}')
+          RESPONSE=$(curl -fsS -X POST "$PERFMON_URL/api/v1/runs" \
+            -H "Authorization: Bearer $PERFMON_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+          RUN_ID=$(jq -r .runId <<<"$RESPONSE")
+          echo "Perfmon Run ID: $RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          echo "### Perfmon run \`$RUN_ID\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run JMeter (non-GUI)
+        id: jmeter
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          rm -rf results.jtl report jmeter.log
+          jmeter -n -t "$TEST_PLAN" \
+            -l results.jtl -j jmeter.log \
+            -e -o report \
+            -Jperfmon.url="$PERFMON_URL" \
+            -Jperfmon.runId="$RUN_ID" \
+            -Jperfmon.apiKey="$PERFMON_API_KEY"
+
+      - name: Upload HTML report to Perfmon
+        if: always() && steps.run.outputs.run_id != ''
+        run: |
+          set -euo pipefail
+          if [ ! -f report/index.html ]; then echo "No HTML report generated - skipping"; exit 0; fi
+          (cd report && zip -qr ../report.zip .)
+          curl -fsS -X POST "$PERFMON_URL/api/v1/runs/$RUN_ID/artifacts" \
+            -H "Authorization: Bearer $PERFMON_API_KEY" \
+            -F kind=HTML_REPORT -F name=jmeter-report -F source=CI \
+            -F "file=@report.zip" | jq '{duplicate, message, artifact: {id: .artifact.id, kind: .artifact.kind, version: .artifact.currentVersion}}'
+
+      - name: Upload JTL results to Perfmon
+        if: always() && steps.run.outputs.run_id != ''
+        run: |
+          set -euo pipefail
+          if [ ! -s results.jtl ]; then echo "No JTL file - skipping"; exit 0; fi
+          curl -fsS -X POST "$PERFMON_URL/api/v1/runs/$RUN_ID/artifacts" \
+            -H "Authorization: Bearer $PERFMON_API_KEY" \
+            -F kind=JTL -F source=CI \
+            -F "file=@results.jtl" | jq '{duplicate, message}'
+          if [ -f jmeter.log ]; then
+            curl -fsS -X POST "$PERFMON_URL/api/v1/runs/$RUN_ID/artifacts" \
+              -H "Authorization: Bearer $PERFMON_API_KEY" \
+              -F kind=LOG -F source=CI -F "file=@jmeter.log" > /dev/null
+          fi
+
+      - name: Complete Perfmon run
+        if: always() && steps.run.outputs.run_id != ''
+        run: |
+          set -euo pipefail
+          STATUS=COMPLETED
+          if [ "${{ steps.jmeter.outcome }}" != "success" ]; then STATUS=FAILED; fi
+          curl -fsS -X POST "$PERFMON_URL/api/v1/runs/$RUN_ID/complete" \
+            -H "Authorization: Bearer $PERFMON_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"status\":\"$STATUS\"}" | jq '{runId, status}'
+
+      - name: Wait for analysis and apply quality gate
+        if: always() && steps.run.outputs.run_id != ''
+        run: |
+          set -euo pipefail
+          DEADLINE=$(( $(date +%s) + PERFMON_ANALYSIS_TIMEOUT_SEC ))
+          while :; do
+            RUN=$(curl -fsS "$PERFMON_URL/api/v1/runs/$RUN_ID" -H "Authorization: Bearer $PERFMON_API_KEY")
+            STATUS=$(jq -r .status <<<"$RUN")
+            case "$STATUS" in COMPLETED|FAILED|ABORTED|CANCELLED) break ;; esac
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::Perfmon analysis did not finish within ${PERFMON_ANALYSIS_TIMEOUT_SEC}s (status $STATUS)"
+              exit 1
+            fi
+            echo "Run $RUN_ID is $STATUS - waiting for analysis..."
+            sleep 10
+          done
+          RESULT=$(jq -r '.result // "NONE"' <<<"$RUN")
+          SCORE=$(jq -r '.performanceScore // "n/a"' <<<"$RUN")
+          echo "Status: $STATUS  Result: $RESULT  Score: $SCORE"
+          jq -r '.resultBreakdown.reasons // [] | .[] | "  - " + .' <<<"$RUN"
+          curl -fsS "$PERFMON_URL/api/v1/runs/$RUN_ID/summary-text" -H "Authorization: Bearer $PERFMON_API_KEY" || true
+          {
+            echo "| Run ID | Status | Result | Score |"
+            echo "|---|---|---|---|"
+            echo "| \`$RUN_ID\` | $STATUS | **$RESULT** | $SCORE |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$RESULT" in
+            PASS) echo "Quality gate passed" ;;
+            PASS_WITH_WARNINGS) echo "::warning::Quality gate passed with warnings" ;;
+            INCONCLUSIVE)
+              if [ "$PERFMON_FAIL_ON_INCONCLUSIVE" = "true" ]; then echo "::error::Result INCONCLUSIVE"; exit 1; fi
+              echo "::warning::Result INCONCLUSIVE (not enough data for a verdict)" ;;
+            FAIL) echo "::error::Perfmon quality gate FAILED for $RUN_ID"; exit 1 ;;
+            *) echo "::error::No result was produced for $RUN_ID"; exit 1 ;;
+          esac
+
+      - name: Keep JMeter outputs as workflow artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmeter-${{ steps.run.outputs.run_id || github.run_id }}
+          path: |
+            report/
+            results.jtl
+            jmeter.log
+          if-no-files-found: ignore

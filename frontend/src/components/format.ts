@@ -33,3 +33,18 @@ export const fmtDate = (v: string | number | Date | null | undefined) => (v ? ne
 
 /** ≈ marker for approximated percentiles (never display misleading percentiles silently). */
 export const approx = (method?: string | null) => (method === 'interval_weighted_approx' ? '≈ ' : '');
+
+/** Relative time ("3 min ago", "in 2 h"); falls back to the date for > 30 days. */
+export function fmtRelative(v: string | number | Date | null | undefined, now = Date.now()) {
+  if (!v) return '—';
+  const t = new Date(v).getTime();
+  if (!Number.isFinite(t)) return '—';
+  const s = Math.round((now - t) / 1000);
+  const a = Math.abs(s);
+  const f = (n: number, u: string) => (s >= 0 ? `${n} ${u} ago` : `in ${n} ${u}`);
+  if (a < 45) return s >= 0 ? 'just now' : 'in a moment';
+  if (a < 3600) return f(Math.round(a / 60), 'min');
+  if (a < 86400) return f(Math.round(a / 3600), 'h');
+  if (a < 30 * 86400) return f(Math.round(a / 86400), a < 2 * 86400 ? 'day' : 'days');
+  return fmtDate(v);
+}

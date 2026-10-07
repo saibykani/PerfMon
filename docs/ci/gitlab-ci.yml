@@ -1,0 +1,148 @@
+# Perfmon performance test pipeline for GitLab CI.
+#
+# Copy into .gitlab-ci.yml (or include it) in the repository that holds your JMeter test plan.
+#
+# Required CI/CD variables (Settings -> CI/CD -> Variables), both "Masked" and ideally "Protected":
+#   PERFMON_URL       Public base URL of the Perfmon backend, e.g. https://perfmon-api.example.com
+#   PERFMON_API_KEY   Perfmon API key (pmk_...) with the "ingest" scope
+#
+# Flow: create run (Run ID) -> JMeter non-GUI with the InfluxDB Backend Listener streaming to
+# /api/v1/ingest/influx/write?runId=<RUN_ID> -> HTML report -> zip + upload (HTML_REPORT) ->
+# upload JTL -> complete run -> poll until analysis finishes -> quality gate on `result`.
+#
+# The test plan's Backend Listener reads the properties passed with -J:
+#   influxdbUrl   = ${__P(perfmon.url)}/api/v1/ingest/influx/write?runId=${__P(perfmon.runId)}
+#   influxdbToken = ${__P(perfmon.apiKey)}
+
+stages:
+  - performance
+
+variables:
+  JMETER_VERSION: "5.6.3"
+  TEST_PLAN: perf/payment-load.jmx
+  PERFMON_PROJECT: payments
+  PERFMON_APPLICATION: merchant-payments
+  PERFMON_ENVIRONMENT: Performance
+  PERFMON_TEST: 200 TPS Payment Load
+  PERFMON_ANALYSIS_TIMEOUT_SEC: "900"
+  PERFMON_FAIL_ON_INCONCLUSIVE: "false"
+
+performance-test:
+  stage: performance
+  image: eclipse-temurin:17-jdk
+  timeout: 2h
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  cache:
+    key: jmeter-$JMETER_VERSION
+    paths:
+      - .jmeter/
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl jq zip > /dev/null
+    - |
+      if [ ! -x ".jmeter/apache-jmeter-${JMETER_VERSION}/bin/jmeter" ]; then
+        mkdir -p .jmeter
+        curl -fsSL "https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-${JMETER_VERSION}.tgz" | tar -xz -C .jmeter
+      fi
+    - export PATH="$CI_PROJECT_DIR/.jmeter/apache-jmeter-${JMETER_VERSION}/bin:$PATH"
+  script:
+    # 1. Create the run and obtain the Run ID
+    - |
+      set -euo pipefail
+      BODY=$(jq -n \
+        --arg project "$PERFMON_PROJECT" \
+        --arg application "$PERFMON_APPLICATION" \
+        --arg environment "$PERFMON_ENVIRONMENT" \
+        --arg test "$PERFMON_TEST" \
+        --arg build "$CI_PIPELINE_IID" \
+        --arg branch "$CI_COMMIT_REF_NAME" \
+        --arg commit "$CI_COMMIT_SHA" \
+        --arg ciUrl "$CI_PIPELINE_URL" \
+        '{project: $project, application: $application, environment: $environment, test: $test,
+          createTestIfMissing: true, testType: "LOAD",
+          buildNumber: $build, branch: $branch, commit: $commit,
+          triggeredBy: "CI", ciSystem: "gitlab", ciUrl: $ciUrl}')
+      RUN_ID=$(curl -fsS -X POST "$PERFMON_URL/api/v1/runs" \
+        -H "Authorization: Bearer $PERFMON_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "$BODY" | jq -r .runId)
+      echo "RUN_ID=$RUN_ID" > perfmon.env
+      echo "Perfmon Run ID: $RUN_ID"
+    # 2. Run JMeter non-GUI (live metrics stream to Perfmon through the Backend Listener)
+    - |
+      source perfmon.env
+      JMETER_RC=0
+      jmeter -n -t "$TEST_PLAN" -l results.jtl -j jmeter.log -e -o report \
+        -Jperfmon.url="$PERFMON_URL" -Jperfmon.runId="$RUN_ID" -Jperfmon.apiKey="$PERFMON_API_KEY" || JMETER_RC=$?
+      if [ "$JMETER_RC" -eq 0 ]; then echo "RUN_STATUS=COMPLETED" >> perfmon.env; else echo "RUN_STATUS=FAILED" >> perfmon.env; fi
+      echo "JMeter exit code: $JMETER_RC"
+    # 3. Upload the HTML report (zip of the report directory), the JTL and the JMeter log
+    - |
+      set -euo pipefail
+      source perfmon.env
+      API="$PERFMON_URL/api/v1/runs/$RUN_ID/artifacts"
+      if [ -f report/index.html ]; then
+        (cd report && zip -qr ../report.zip .)
+        curl -fsS -X POST "$API" -H "Authorization: Bearer $PERFMON_API_KEY" \
+          -F kind=HTML_REPORT -F name=jmeter-report -F source=CI -F "file=@report.zip" | jq -r .message
+      fi
+      if [ -s results.jtl ]; then
+        curl -fsS -X POST "$API" -H "Authorization: Bearer $PERFMON_API_KEY" \
+          -F kind=JTL -F source=CI -F "file=@results.jtl" | jq -r .message
+      fi
+      if [ -f jmeter.log ]; then
+        curl -fsS -X POST "$API" -H "Authorization: Bearer $PERFMON_API_KEY" \
+          -F kind=LOG -F source=CI -F "file=@jmeter.log" > /dev/null
+      fi
+    # 4. Complete the run: Perfmon flushes metrics and starts SLA / regression / insight analysis
+    - |
+      set -euo pipefail
+      source perfmon.env
+      curl -fsS -X POST "$PERFMON_URL/api/v1/runs/$RUN_ID/complete" \
+        -H "Authorization: Bearer $PERFMON_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "{\"status\":\"$RUN_STATUS\"}" | jq '{runId, status}'
+    # 5. Wait for the analysis and gate on the result
+    - |
+      set -euo pipefail
+      source perfmon.env
+      DEADLINE=$(( $(date +%s) + PERFMON_ANALYSIS_TIMEOUT_SEC ))
+      while :; do
+        RUN=$(curl -fsS "$PERFMON_URL/api/v1/runs/$RUN_ID" -H "Authorization: Bearer $PERFMON_API_KEY")
+        STATUS=$(jq -r .status <<<"$RUN")
+        case "$STATUS" in COMPLETED|FAILED|ABORTED|CANCELLED) break ;; esac
+        if [ "$(date +%s)" -ge "$DEADLINE" ]; then echo "Analysis did not finish in time (status $STATUS)"; exit 1; fi
+        echo "Run $RUN_ID is $STATUS - waiting for analysis..."
+        sleep 10
+      done
+      RESULT=$(jq -r '.result // "NONE"' <<<"$RUN")
+      echo "Perfmon $RUN_ID: status=$STATUS result=$RESULT score=$(jq -r '.performanceScore // "n/a"' <<<"$RUN")"
+      jq -r '.resultBreakdown.reasons // [] | .[] | "  - " + .' <<<"$RUN"
+      curl -fsS "$PERFMON_URL/api/v1/runs/$RUN_ID/summary-text" -H "Authorization: Bearer $PERFMON_API_KEY" || true
+      case "$RESULT" in
+        PASS|PASS_WITH_WARNINGS) echo "Quality gate passed ($RESULT)" ;;
+        INCONCLUSIVE)
+          if [ "$PERFMON_FAIL_ON_INCONCLUSIVE" = "true" ]; then echo "Result INCONCLUSIVE"; exit 1; fi
+          echo "WARNING: result INCONCLUSIVE (not enough data for a verdict)" ;;
+        *) echo "Perfmon quality gate FAILED for $RUN_ID ($RESULT)"; exit 1 ;;
+      esac
+  after_script:
+    # Job cancelled or failed before completion: make sure the run does not stay RUNNING.
+    - |
+      if [ -f perfmon.env ]; then
+        source perfmon.env
+        STATUS=$(curl -fsS "$PERFMON_URL/api/v1/runs/$RUN_ID" -H "Authorization: Bearer $PERFMON_API_KEY" | jq -r .status || echo unknown)
+        if [ "$STATUS" = "RUNNING" ] || [ "$STATUS" = "QUEUED" ]; then
+          curl -fsS -X POST "$PERFMON_URL/api/v1/runs/$RUN_ID/abort" -H "Authorization: Bearer $PERFMON_API_KEY" \
+            -H "Content-Type: application/json" -d '{"reason":"GitLab job ended before completion"}' || true
+        fi
+      fi
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - report/
+      - results.jtl
+      - jmeter.log
+      - perfmon.env

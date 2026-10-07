@@ -1,0 +1,186 @@
+// Perfmon performance test pipeline for Jenkins (declarative).
+//
+// Prerequisites
+//   - An agent labelled "jmeter" with Java 17+, JMeter 5.6+ on the PATH, curl, jq and zip.
+//   - Jenkins credentials (Manage Jenkins -> Credentials), kind "Secret text":
+//       perfmon-url       Public base URL of the Perfmon backend, e.g. https://perfmon-api.example.com
+//       perfmon-api-key   Perfmon API key (pmk_...) with the "ingest" scope
+//
+// Flow: create run (Run ID) -> JMeter non-GUI with the InfluxDB Backend Listener streaming to
+// /api/v1/ingest/influx/write?runId=<RUN_ID> -> HTML report -> zip + upload (HTML_REPORT) ->
+// upload JTL -> complete run -> poll until analysis finishes -> quality gate on `result`.
+//
+// The test plan's Backend Listener reads the properties passed with -J:
+//   influxdbUrl   = ${__P(perfmon.url)}/api/v1/ingest/influx/write?runId=${__P(perfmon.runId)}
+//   influxdbToken = ${__P(perfmon.apiKey)}
+
+pipeline {
+  agent { label 'jmeter' }
+
+  options {
+    timeout(time: 120, unit: 'MINUTES')
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
+  parameters {
+    string(name: 'TEST_PLAN', defaultValue: 'perf/payment-load.jmx', description: 'JMeter test plan (.jmx)')
+    string(name: 'PERFMON_PROJECT', defaultValue: 'payments', description: 'Perfmon project key or name')
+    string(name: 'PERFMON_APPLICATION', defaultValue: 'merchant-payments', description: 'Application code or name')
+    string(name: 'PERFMON_ENVIRONMENT', defaultValue: 'Performance', description: 'Environment name or type')
+    string(name: 'PERFMON_TEST', defaultValue: '200 TPS Payment Load', description: 'Performance test name')
+    booleanParam(name: 'FAIL_ON_INCONCLUSIVE', defaultValue: false, description: 'Fail the build when the result is INCONCLUSIVE')
+  }
+
+  environment {
+    PERFMON_URL     = credentials('perfmon-url')
+    PERFMON_API_KEY = credentials('perfmon-api-key')
+    PERFMON_ANALYSIS_TIMEOUT_SEC = '900'
+  }
+
+  stages {
+    stage('Create Perfmon run') {
+      steps {
+        script {
+          env.RUN_ID = sh(returnStdout: true, script: '''#!/bin/bash
+            set -euo pipefail
+            BODY=$(jq -n \
+              --arg project "$PERFMON_PROJECT" \
+              --arg application "$PERFMON_APPLICATION" \
+              --arg environment "$PERFMON_ENVIRONMENT" \
+              --arg test "$PERFMON_TEST" \
+              --arg build "$BUILD_NUMBER" \
+              --arg branch "${BRANCH_NAME:-${GIT_BRANCH:-unknown}}" \
+              --arg commit "${GIT_COMMIT:-unknown}" \
+              --arg ciUrl "$BUILD_URL" \
+              '{project: $project, application: $application, environment: $environment, test: $test,
+                createTestIfMissing: true, testType: "LOAD",
+                buildNumber: $build, branch: $branch, commit: $commit,
+                triggeredBy: "CI", ciSystem: "jenkins", ciUrl: $ciUrl}')
+            curl -fsS -X POST "$PERFMON_URL/api/v1/runs" \
+              -H "Authorization: Bearer $PERFMON_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "$BODY" | jq -r .runId
+          ''').trim()
+          currentBuild.description = "Perfmon ${env.RUN_ID}"
+          echo "Perfmon Run ID: ${env.RUN_ID}"
+        }
+      }
+    }
+
+    stage('Run JMeter') {
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: '''#!/bin/bash
+            set -euo pipefail
+            rm -rf results.jtl report jmeter.log report.zip
+            jmeter -n -t "$TEST_PLAN" \
+              -l results.jtl -j jmeter.log \
+              -e -o report \
+              -Jperfmon.url="$PERFMON_URL" \
+              -Jperfmon.runId="$RUN_ID" \
+              -Jperfmon.apiKey="$PERFMON_API_KEY"
+          ''')
+          env.JMETER_STATUS = (rc == 0) ? 'COMPLETED' : 'FAILED'
+          if (rc != 0) {
+            unstable("JMeter exited with code ${rc}")
+          }
+        }
+      }
+    }
+
+    stage('Upload artifacts') {
+      steps {
+        sh '''#!/bin/bash
+          set -euo pipefail
+          API="$PERFMON_URL/api/v1/runs/$RUN_ID/artifacts"
+          if [ -f report/index.html ]; then
+            (cd report && zip -qr ../report.zip .)
+            curl -fsS -X POST "$API" -H "Authorization: Bearer $PERFMON_API_KEY" \
+              -F kind=HTML_REPORT -F name=jmeter-report -F source=CI -F "file=@report.zip" | jq -r .message
+          else
+            echo "No HTML report generated - skipping"
+          fi
+          if [ -s results.jtl ]; then
+            curl -fsS -X POST "$API" -H "Authorization: Bearer $PERFMON_API_KEY" \
+              -F kind=JTL -F source=CI -F "file=@results.jtl" | jq -r .message
+          fi
+          if [ -f jmeter.log ]; then
+            curl -fsS -X POST "$API" -H "Authorization: Bearer $PERFMON_API_KEY" \
+              -F kind=LOG -F source=CI -F "file=@jmeter.log" > /dev/null
+          fi
+        '''
+      }
+    }
+
+    stage('Complete run') {
+      steps {
+        sh '''#!/bin/bash
+          set -euo pipefail
+          curl -fsS -X POST "$PERFMON_URL/api/v1/runs/$RUN_ID/complete" \
+            -H "Authorization: Bearer $PERFMON_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\\"status\\":\\"${JMETER_STATUS:-COMPLETED}\\"}" | jq '{runId, status}'
+        '''
+        script { env.PERFMON_COMPLETED = 'true' }
+      }
+    }
+
+    stage('Quality gate') {
+      steps {
+        script {
+          def result = sh(returnStdout: true, script: '''#!/bin/bash
+            set -euo pipefail
+            DEADLINE=$(( $(date +%s) + PERFMON_ANALYSIS_TIMEOUT_SEC ))
+            while :; do
+              RUN=$(curl -fsS "$PERFMON_URL/api/v1/runs/$RUN_ID" -H "Authorization: Bearer $PERFMON_API_KEY")
+              STATUS=$(jq -r .status <<<"$RUN")
+              case "$STATUS" in COMPLETED|FAILED|ABORTED|CANCELLED) break ;; esac
+              if [ "$(date +%s)" -ge "$DEADLINE" ]; then echo "TIMEOUT"; exit 0; fi
+              echo "Run $RUN_ID is $STATUS - waiting for analysis..." >&2
+              sleep 10
+            done
+            jq -r '.resultBreakdown.reasons // [] | .[] | "  - " + .' <<<"$RUN" >&2
+            curl -fsS "$PERFMON_URL/api/v1/runs/$RUN_ID/summary-text" -H "Authorization: Bearer $PERFMON_API_KEY" >&2 || true
+            jq -r '.result // "NONE"' <<<"$RUN"
+          ''').trim()
+          echo "Perfmon result for ${env.RUN_ID}: ${result}"
+          switch (result) {
+            case 'PASS':
+              break
+            case 'PASS_WITH_WARNINGS':
+              unstable('Perfmon quality gate passed with warnings')
+              break
+            case 'INCONCLUSIVE':
+              if (params.FAIL_ON_INCONCLUSIVE) { error('Perfmon result INCONCLUSIVE') }
+              unstable('Perfmon result INCONCLUSIVE (not enough data for a verdict)')
+              break
+            case 'TIMEOUT':
+              error("Perfmon analysis did not finish within ${env.PERFMON_ANALYSIS_TIMEOUT_SEC}s")
+              break
+            default:
+              error("Perfmon quality gate FAILED for ${env.RUN_ID} (result ${result})")
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'report/**, results.jtl, jmeter.log', allowEmptyArchive: true
+    }
+    aborted {
+      // Build cancelled before the run was completed: mark it ABORTED in Perfmon.
+      script {
+        if (env.RUN_ID && env.PERFMON_COMPLETED != 'true') {
+          sh '''#!/bin/bash
+            curl -fsS -X POST "$PERFMON_URL/api/v1/runs/$RUN_ID/abort" \
+              -H "Authorization: Bearer $PERFMON_API_KEY" -H "Content-Type: application/json" \
+              -d '{"reason":"Jenkins build aborted"}' || true
+          '''
+        }
+      }
+    }
+  }
+}

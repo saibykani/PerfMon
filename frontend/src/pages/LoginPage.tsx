@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode, type MutableRefObject } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, ChevronDown, Eye, EyeOff, Moon, Sparkles, Sun, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, ArrowRight, CheckCircle2, Eye, EyeOff, Moon, Sun } from 'lucide-react';
 import { useAuth } from '@/stores/auth';
 import { useUi } from '@/stores/ui';
 import { api, ApiError, API_BASE } from '@/services/api';
@@ -13,97 +13,143 @@ const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.
 /** Turn transport/API failures into actionable messages instead of a bare status code. */
 function explain(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.status === 401) return 'Wrong email or password. Try again or click Forgot password to reset it.';
+    if (err.status === 401) return 'That email and password don’t match. Try again or reset your password.';
     if (err.status === 423) return err.message;
-    if (err.status === 429) return 'Too many attempts. Please wait a minute and try again.';
+    if (err.status === 429) return 'Too many attempts — please wait a minute and try again.';
     if (err.status === 404 || err.status === 405 || err.code === 'HTTP_ERROR' || err.status >= 502)
-      return `Perfmon API is not reachable at ${API_BASE || window.location.origin}/api/v1. If this UI is hosted separately (e.g. Vercel), set VITE_API_BASE_URL to your backend URL.`;
+      return `The Perfmon API isn’t reachable at ${API_BASE || window.location.origin}/api/v1. Check that the backend is running.`;
     return err.message;
   }
-  return `Couldn't reach the Perfmon API${API_BASE ? ` at ${API_BASE}` : ''}. Check that the backend is running.`;
+  return 'Couldn’t reach the Perfmon API. Check your connection and that the backend is running.';
 }
 
-/* ------------------------------------------------------------------ animated background */
+/* ------------------------------------------------------------------ Signal: interactive wave field */
 
-const FLOAT_COLORS = ['#4285f4', '#ea4335', '#fbbc04', '#34a853', '#9b72cb', '#14b8a6'];
+type Mode = 'idle' | 'busy' | 'success' | 'error';
+interface SignalCtl { pulse: () => void; mode: Mode }
 
-function Background() {
-  const ref = useRef<HTMLDivElement>(null);
-  const floaters = useMemo(() => Array.from({ length: 16 }, (_, i) => {
-    const size = 10 + ((i * 37) % 26);
-    return {
-      left: `${(i * 61) % 100}%`, size, color: FLOAT_COLORS[i % FLOAT_COLORS.length],
-      radius: i % 3 === 0 ? '50%' : i % 3 === 1 ? '6px' : '2px', ring: i % 4 === 0,
-      duration: 18 + ((i * 7) % 16), delay: -((i * 3.7) % 20),
-    };
-  }), []);
+const PALETTE = {
+  dark: [[167, 139, 250], [96, 165, 250], [45, 212, 191], [244, 114, 182]],
+  light: [[124, 58, 237], [59, 130, 246], [13, 148, 136], [219, 39, 119]],
+};
+
+function Signal({ ctl, theme }: { ctl: MutableRefObject<SignalCtl>; theme: 'light' | 'dark' }) {
+  const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    if (reducedMotion()) return;
-    const el = ref.current!;
-    const move = (e: globalThis.MouseEvent) => { el.style.setProperty('--mx', `${e.clientX}px`); el.style.setProperty('--my', `${e.clientY}px`); };
-    window.addEventListener('mousemove', move);
-    return () => window.removeEventListener('mousemove', move);
-  }, []);
-  const wave = (amp: number, len: number, y: number) => {
-    let d = `M0 ${y}`;
-    for (let x = 0; x <= 2400; x += len) d += ` Q ${x + len / 4} ${y - amp} ${x + len / 2} ${y} T ${x + len} ${y}`;
-    return d;
-  };
-  return (
-    <div className="bg" ref={ref} aria-hidden="true">
-      <div className="blob b1" /><div className="blob b2" /><div className="blob b3" /><div className="blob b4" /><div className="blob b5" />
-      <div className="dots" />
-      <div className="cursor-glow" />
-      <div className="floaters">
-        {floaters.map((f, i) => (
-          <span key={i} style={{
-            left: f.left, width: f.size, height: f.size, borderRadius: f.radius, animationDuration: `${f.duration}s`, animationDelay: `${f.delay}s`,
-            background: f.ring ? 'transparent' : `${f.color}55`, border: f.ring ? `2px solid ${f.color}88` : undefined,
-          }} />
-        ))}
-      </div>
-      <div className="waves">
-        <svg className="w3" viewBox="0 0 2400 200" preserveAspectRatio="none"><path d={wave(26, 300, 120)} fill="none" stroke="#34a853" strokeOpacity=".35" strokeWidth="2" /></svg>
-        <svg className="w2" viewBox="0 0 2400 200" preserveAspectRatio="none"><path d={wave(38, 400, 140)} fill="none" stroke="#ea4335" strokeOpacity=".3" strokeWidth="2" /></svg>
-        <svg className="w1" viewBox="0 0 2400 200" preserveAspectRatio="none">
-          <defs><linearGradient id="wg" x1="0" x2="1"><stop offset="0" stopColor="#4285f4" /><stop offset=".33" stopColor="#9b72cb" /><stop offset=".66" stopColor="#d96570" /><stop offset="1" stopColor="#4285f4" /></linearGradient></defs>
-          <path d={wave(30, 240, 160)} fill="none" stroke="url(#wg)" strokeOpacity=".55" strokeWidth="2.5" />
-        </svg>
-      </div>
-    </div>
-  );
+    const c = ref.current!;
+    const ctx = c.getContext('2d')!;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    let W = 0, H = 0, raf = 0;
+    const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999 };
+    const resize = () => { W = c.clientWidth; H = c.clientHeight; c.width = W * dpr; c.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(c);
+    const onMove = (e: MouseEvent) => { mouse.tx = e.clientX; mouse.ty = e.clientY; };
+    const onLeave = () => { mouse.tx = -9999; mouse.ty = -9999; };
+    window.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseleave', onLeave);
+
+    const RIBBONS = 24;
+    const sparks = Array.from({ length: 26 }, (_, i) => ({ r: i % RIBBONS, u: Math.random(), v: 0.0006 + Math.random() * 0.0016 }));
+    let t = 0, energy = 0, amp = 1, flash = 0, speed = 1, green = 0;
+    let lastPulse = 0;
+    ctl.current.pulse = () => { energy = Math.min(1, energy + 0.22); lastPulse = performance.now(); };
+
+    const pal = PALETTE[theme];
+    const yAt = (i: number, x: number) => {
+      const nx = x / W;
+      const base = H * 0.56 + (i - RIBBONS / 2) * (H * 0.011);
+      const a = H * 0.13 * amp * (1 + energy * 0.9);
+      const w = Math.sin(nx * 5.2 + t * 0.9 + i * 0.16) * 0.55 + Math.sin(nx * 9.5 - t * 1.3 + i * 0.09) * 0.28 + Math.sin(nx * 2.1 + t * 0.4 - i * 0.05) * 0.5;
+      let y = base + a * w * (0.65 + 0.35 * Math.sin(i * 0.4 + t * 0.2));
+      // cursor bends the field
+      const dx = x - mouse.x, dy = y - mouse.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < 90000) y += 64 * Math.tanh(dy / 38) * Math.exp(-(dx * dx) / 22000) * Math.exp(-(dy * dy) / 30000) * amp;
+      return y;
+    };
+
+    const frame = () => {
+      const mode = ctl.current.mode;
+      const targetSpeed = mode === 'busy' ? 3.2 : 1;
+      speed += (targetSpeed - speed) * 0.05;
+      amp += ((mode === 'success' ? 0.02 : 1) - amp) * (mode === 'success' ? 0.06 : 0.04);
+      green += ((mode === 'success' ? 1 : 0) - green) * 0.05;
+      if (mode === 'error' && flash < 0.05) flash = 1;
+      flash *= 0.94;
+      energy *= performance.now() - lastPulse > 120 ? 0.965 : 1;
+      t += 0.006 * speed;
+      mouse.x += (mouse.tx - mouse.x) * 0.12; mouse.y += (mouse.ty - mouse.y) * 0.12;
+
+      ctx.clearRect(0, 0, W, H);
+      ctx.globalCompositeOperation = theme === 'dark' ? 'lighter' : 'source-over';
+      const step = Math.max(10, W / 110);
+      for (let i = 0; i < RIBBONS; i++) {
+        const g = ctx.createLinearGradient(0, 0, W, 0);
+        const k = i / RIBBONS;
+        pal.forEach((col, j) => {
+          const [r, gg, b] = col;
+          const mix = (v: number, to: number) => Math.round(v + (to - v) * green);
+          const rr = mix(r, 16), g2 = mix(gg, 185), bb = mix(b, 129);
+          const rr2 = Math.round(rr + (255 - rr) * flash * 0.0), alpha = (theme === 'dark' ? 0.34 : 0.3) * (0.35 + 0.65 * Math.sin(k * Math.PI)) + flash * 0.3;
+          g.addColorStop(j / (pal.length - 1), `rgba(${flash > 0.05 ? Math.round(rr2 + (239 - rr2) * flash) : rr2},${Math.round(g2 * (1 - flash * 0.7))},${Math.round(bb * (1 - flash * 0.7))},${alpha})`);
+        });
+        ctx.strokeStyle = g;
+        ctx.lineWidth = i % 6 === 0 ? 2 : 1.1;
+        ctx.beginPath();
+        for (let x = -step; x <= W + step; x += step) {
+          const y = yAt(i, x);
+          if (x <= -step) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      // light sparks travelling along ribbons
+      for (const s of sparks) {
+        s.u += s.v * speed * (1 + energy * 2);
+        if (s.u > 1.02) { s.u = -0.02; s.r = Math.floor(Math.random() * RIBBONS); }
+        const x = s.u * W, y = yAt(s.r, x);
+        const rad = 1.3 + energy * 1.2;
+        const grd = ctx.createRadialGradient(x, y, 0, x, y, rad * 4);
+        const col = green > 0.5 ? '16,185,129' : theme === 'dark' ? '220,215,255' : '99,102,241';
+        grd.addColorStop(0, `rgba(${col},${theme === 'dark' ? 1 : 0.85})`);
+        grd.addColorStop(0.25, `rgba(${col},${theme === 'dark' ? 0.55 : 0.35})`);
+        grd.addColorStop(1, `rgba(${col},0)`);
+        ctx.fillStyle = grd;
+        ctx.beginPath(); ctx.arc(x, y, rad * 4, 0, Math.PI * 2); ctx.fill();
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    if (reducedMotion()) { t = 1.3; frame(); cancelAnimationFrame(raf); }
+    else frame();
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); window.removeEventListener('mousemove', onMove); document.removeEventListener('mouseleave', onLeave); };
+  }, [theme, ctl]);
+  return <canvas ref={ref} className="signal" aria-hidden="true" />;
 }
 
-function ripple(e: MouseEvent<HTMLButtonElement>) {
-  const b = e.currentTarget;
-  const r = b.getBoundingClientRect();
-  const s = Math.max(r.width, r.height);
-  const span = document.createElement('span');
-  span.className = 'ripple';
-  span.style.cssText = `width:${s}px;height:${s}px;left:${e.clientX - r.left - s / 2}px;top:${e.clientY - r.top - s / 2}px`;
-  b.appendChild(span);
-  setTimeout(() => span.remove(), 650);
-}
+/* ------------------------------------------------------------------ shell */
 
-function Shell({ children, busy }: { children: ReactNode; busy?: boolean }) {
+function Shell({ children, ctl }: { children: ReactNode; ctl: MutableRefObject<SignalCtl> }) {
   const { theme, toggleTheme } = useUi();
+  const health = useQuery({ queryKey: ['health'], queryFn: () => api.get<{ status: string }>('/health'), retry: false, refetchInterval: 30000 });
+  const up = health.data?.status === 'UP';
   return (
     <div className="auth">
-      <Background />
-      <div className="stage">
-        <div className={`gcard ${busy ? 'busy' : ''}`}>
-          {busy && <div className="progress" />}
-          <div className="glogo"><LogoMark size={36} animated /><span className="word">Perf<span>mon</span></span></div>
-          {children}
-        </div>
-        <div className="gfoot">
-          <button type="button" onClick={toggleTheme} aria-label="Toggle light/dark theme">{theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}{theme === 'dark' ? 'Light' : 'Dark'} mode <ChevronDown size={12} style={{ opacity: 0 }} /></button>
-          <nav><Link to="/help">Help</Link><a href="/api/docs" target="_blank" rel="noreferrer">API</a><span style={{ padding: '6px 4px' }}>© {new Date().getFullYear()} Perfmon</span></nav>
-        </div>
+      <Signal ctl={ctl} theme={theme} />
+      <div className="vignette" />
+      <div className="grain" />
+      {children}
+      <div className="foot">
+        <span className={`status ${health.isError ? 'down' : ''}`} title="Perfmon API status"><i />{health.isLoading ? 'Checking API…' : up ? 'All systems operational' : 'API unreachable'}</span>
+        <Link to="/help">Help</Link>
+        <a href={`${API_BASE}/api/docs`} target="_blank" rel="noreferrer">API docs</a>
+        <button type="button" onClick={toggleTheme} aria-label="Toggle light/dark theme">{theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}{theme === 'dark' ? 'Light' : 'Dark'}</button>
       </div>
     </div>
   );
 }
+
+const Mark = () => <div className="mark"><LogoMark size={52} animated /></div>;
 
 /* ------------------------------------------------------------------ pages */
 
@@ -111,157 +157,121 @@ export function LoginPage() {
   const login = useAuth((s) => s.login);
   const nav = useNavigate();
   const loc = useLocation() as { state?: { from?: string } };
-  const saved = (() => { try { return localStorage.getItem('perfmon.lastEmail') ?? ''; } catch { return ''; } })();
-  const [step, setStep] = useState<'email' | 'password'>('email');
-  const [dir, setDir] = useState<'fwd' | 'back'>('fwd');
-  const [email, setEmail] = useState(saved);
+  const ctl = useRef<SignalCtl>({ pulse: () => undefined, mode: 'idle' });
+  const [email, setEmail] = useState(() => { try { return localStorage.getItem('perfmon.lastEmail') ?? ''; } catch { return ''; } });
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [caps, setCaps] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle');
   const [errKey, setErrKey] = useState(0);
+  const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle');
   const cfg = useQuery({ queryKey: ['auth-config'], queryFn: () => api.get<{ demo?: { email: string; password?: string } | null }>('/auth/config'), retry: false, staleTime: Infinity });
-  const demo = cfg.data?.demo;
 
-  const goPassword = (e?: FormEvent) => {
-    e?.preventDefault();
-    const v = email.trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { setError('Enter a valid email address'); setErrKey((k) => k + 1); return; }
-    setError(null); setDir('fwd'); setStep('password');
-    setTimeout(() => document.getElementById('password')?.focus(), 60);
-  };
-  const back = () => { setDir('back'); setStep('email'); setError(null); setPassword(''); };
-
-  const submit = async (e?: FormEvent) => {
-    e?.preventDefault();
-    if (!password) { setError('Enter a password'); setErrKey((k) => k + 1); return; }
-    setState('busy'); setError(null);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!email.trim() || !password) { setError('Enter your email and password.'); setErrKey((k) => k + 1); ctl.current.mode = 'error'; setTimeout(() => (ctl.current.mode = 'idle'), 500); return; }
+    setState('busy'); setError(null); ctl.current.mode = 'busy';
     try {
       await login(email.trim(), password);
       try { localStorage.setItem('perfmon.lastEmail', email.trim()); } catch { /* ignore */ }
-      setState('done');
-      setTimeout(() => nav(loc.state?.from ?? '/', { replace: true }), reducedMotion() ? 0 : 600);
+      setState('done'); ctl.current.mode = 'success';
+      setTimeout(() => nav(loc.state?.from ?? '/', { replace: true }), reducedMotion() ? 0 : 1100);
     } catch (err) {
       setError(explain(err)); setErrKey((k) => k + 1); setState('idle');
+      ctl.current.mode = 'error'; setTimeout(() => (ctl.current.mode = 'idle'), 500);
     }
   };
 
-  const useDemo = async () => {
-    if (!demo) return;
-    setError(null);
-    if (!reducedMotion()) for (let i = 1; i <= demo.email.length; i++) { setEmail(demo.email.slice(0, i)); await new Promise((r) => setTimeout(r, 18)); }
-    else setEmail(demo.email);
-    setDir('fwd'); setStep('password');
-    if (demo.password) {
-      await new Promise((r) => setTimeout(r, 250));
-      for (let i = 1; i <= demo.password.length; i++) { setPassword(demo.password.slice(0, i)); await new Promise((r) => setTimeout(r, 30)); }
-    }
-    setTimeout(() => document.getElementById('password')?.focus(), 60);
-  };
-
-  const initials = email.trim().slice(0, 1).toUpperCase() || 'P';
+  const fillDemo = () => { const d = cfg.data?.demo; if (!d) return; setEmail(d.email); if (d.password) setPassword(d.password); ctl.current.pulse(); };
 
   return (
-    <Shell busy={state === 'busy'}>
-      {step === 'email' ? (
-        <form key="email" className={`gform step ${dir === 'back' ? 'back' : ''}`} onSubmit={goPassword} noValidate>
-          <h1>Sign in</h1>
-          <p className="sub">to continue to Perfmon</p>
-          <div className={`tf ${error ? 'err' : ''}`}>
-            <input id="email" type="email" placeholder=" " autoComplete="username" value={email} onChange={(e) => { setEmail(e.target.value); setError(null); }} autoFocus />
-            <label htmlFor="email">Email</label>
+    <Shell ctl={ctl}>
+      <form className="panel" onSubmit={submit} noValidate>
+        <Mark />
+        <h1 className="title">Welcome <em>back</em></h1>
+        <p className="lede">Sign in to Perfmon — performance engineering, observability and intelligence.</p>
+        {error && <div key={errKey} className="msg" role="alert"><AlertCircle size={16} />{error}</div>}
+        <div className="inputs">
+          <div className={`fx ${error ? 'err' : ''}`}>
+            <input id="email" type="email" placeholder=" " autoComplete="username" value={email} autoFocus={!email}
+              onChange={(e) => { setEmail(e.target.value); setError(null); ctl.current.pulse(); }} />
+            <label htmlFor="email">Email address</label>
           </div>
-          {error && <div key={errKey} className="err-msg" role="alert"><AlertCircle size={16} />{error}</div>}
-          <Link to="/forgot-password" className="glink">Forgot email or password?</Link>
-          {demo && (
-            <p className="hint">
-              <button type="button" className="glink demo-link" onClick={useDemo}><Sparkles size={14} /> Use demo account</button>
-              <span style={{ display: 'block' }}>{demo.email}{demo.password ? ` · ${demo.password}` : ''}</span>
-            </p>
-          )}
-          <div className="actions">
-            <span />
-            <button className="gbtn" type="submit" onMouseDown={ripple}>Next</button>
+          <div className={`fx ${error ? 'err' : ''}`}>
+            <input id="password" type={show ? 'text' : 'password'} placeholder=" " autoComplete="current-password" value={password} autoFocus={!!email}
+              onChange={(e) => { setPassword(e.target.value); setError(null); ctl.current.pulse(); }}
+              onKeyDown={(e) => setCaps(e.getModifierState?.('CapsLock') ?? false)} onKeyUp={(e) => setCaps(e.getModifierState?.('CapsLock') ?? false)} />
+            <label htmlFor="password">Password</label>
+            <button type="button" className="fx-btn" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide password' : 'Show password'}>{show ? <EyeOff size={18} /> : <Eye size={18} />}</button>
           </div>
-        </form>
-      ) : (
-        <form key="password" className="gform step" onSubmit={submit} noValidate>
-          <h1>Welcome</h1>
-          <button type="button" className="chip-user" onClick={back} title="Use a different account">
-            <span className="av">{initials}</span><span className="e">{email}</span><ChevronDown size={14} />
-          </button>
-          <div className={`tf ${error ? 'err' : ''}`}>
-            <input id="password" type={show ? 'text' : 'password'} placeholder=" " autoComplete="current-password" value={password}
-              onChange={(e) => { setPassword(e.target.value); setError(null); }}
-              onKeyUp={(e) => setCaps(e.getModifierState?.('CapsLock') ?? false)} onKeyDown={(e) => setCaps(e.getModifierState?.('CapsLock') ?? false)} />
-            <label htmlFor="password">Enter your password</label>
-            <button type="button" className="tf-btn" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide password' : 'Show password'}>{show ? <EyeOff size={20} /> : <Eye size={20} />}</button>
-          </div>
-          {error && <div key={errKey} className="err-msg" role="alert"><AlertCircle size={16} />{error}</div>}
-          {caps && <div className="caps"><AlertCircle size={14} /> Caps Lock is on</div>}
-          <label className="check"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /> Show password</label>
-          <div className="actions">
-            <Link to="/forgot-password" className="glink">Forgot password?</Link>
-            <button className={`gbtn ${state === 'done' ? 'success' : ''}`} type="submit" disabled={state !== 'idle'} onMouseDown={ripple}>
-              {state === 'busy' && <span className="spinner" />}
-              {state === 'done' && <svg className="tick" width="16" height="16" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-              {state === 'done' ? 'Signed in' : 'Sign in'}
-            </button>
-          </div>
-        </form>
-      )}
+        </div>
+        <div className="meta">
+          {caps ? <span className="caps"><AlertCircle size={13} /> Caps Lock is on</span> : <span />}
+          <Link to="/forgot-password">Forgot password?</Link>
+        </div>
+        <button className={`go ${state === 'done' ? 'ok' : ''}`} type="submit" disabled={state !== 'idle'}>
+          {state === 'busy' && <span className="dots" aria-label="Signing in"><i /><i /><i /></span>}
+          {state === 'done' && <><svg className="tick" width="18" height="18" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>Signed in</>}
+          {state === 'idle' && <>Sign in <ArrowRight size={18} className="arrow" /></>}
+        </button>
+        {cfg.data?.demo && <div className="demo">Exploring? <button type="button" onClick={fillDemo}>Use the demo account</button></div>}
+      </form>
     </Shell>
   );
 }
 
 export function ForgotPasswordPage() {
+  const ctl = useRef<SignalCtl>({ pulse: () => undefined, mode: 'idle' });
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   return (
-    <Shell busy={busy}>
-      <form className="gform step" onSubmit={async (e) => { e.preventDefault(); setBusy(true); await api.post('/auth/forgot-password', { email }).catch(() => undefined); setBusy(false); setSent(true); }}>
-        <h1>Account recovery</h1>
-        <p className="sub">Enter your email and we'll send you a reset link</p>
-        {sent ? <div className="notice-ok"><CheckCircle2 size={18} />If an account exists for that email, a reset link is on its way. It expires in 30 minutes.</div> : (
-          <div className="tf"><input id="fp-email" type="email" placeholder=" " value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus /><label htmlFor="fp-email">Email</label></div>
+    <Shell ctl={ctl}>
+      <form className="panel" onSubmit={async (e) => { e.preventDefault(); setBusy(true); ctl.current.mode = 'busy'; await api.post('/auth/forgot-password', { email }).catch(() => undefined); setBusy(false); ctl.current.mode = 'success'; setSent(true); }}>
+        <Mark />
+        <h1 className="title">Reset <em>password</em></h1>
+        <p className="lede">We’ll email you a secure link to choose a new one.</p>
+        {sent ? <div className="msg okmsg"><CheckCircle2 size={16} />If an account exists for that email, a reset link is on its way (valid 30 minutes).</div> : (
+          <>
+            <div className="inputs"><div className="fx"><input id="fp" type="email" placeholder=" " value={email} onChange={(e) => { setEmail(e.target.value); ctl.current.pulse(); }} required autoFocus /><label htmlFor="fp">Email address</label></div></div>
+            <div className="meta"><span /><span /></div>
+            <button className="go" type="submit" disabled={busy}>{busy ? <span className="dots"><i /><i /><i /></span> : <>Send reset link <ArrowRight size={18} className="arrow" /></>}</button>
+          </>
         )}
-        <div className="actions">
-          <Link to="/login" className="glink">Back to sign in</Link>
-          {!sent && <button className="gbtn" type="submit" disabled={busy} onMouseDown={ripple}>Send link</button>}
-        </div>
+        <div className="demo"><Link to="/login" className="linkbtn">← Back to sign in</Link></div>
       </form>
     </Shell>
   );
 }
 
 export function ResetPasswordPage() {
+  const ctl = useRef<SignalCtl>({ pulse: () => undefined, mode: 'idle' });
   const token = new URLSearchParams(window.location.search).get('token') ?? '';
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const valid = password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
   return (
-    <Shell>
-      <form className="gform step" onSubmit={async (e) => {
+    <Shell ctl={ctl}>
+      <form className="panel" onSubmit={async (e) => {
         e.preventDefault();
-        try { await api.post('/auth/reset-password', { token, password }); setMsg({ ok: true, text: 'Password updated. You can sign in now.' }); }
-        catch (err) { setMsg({ ok: false, text: explain(err) }); }
+        try { await api.post('/auth/reset-password', { token, password }); ctl.current.mode = 'success'; setMsg({ ok: true, text: 'Password updated — you can sign in now.' }); }
+        catch (err) { ctl.current.mode = 'error'; setTimeout(() => (ctl.current.mode = 'idle'), 500); setMsg({ ok: false, text: explain(err) }); }
       }}>
-        <h1>Create password</h1>
-        <p className="sub">Use 8 or more characters with letters and numbers</p>
-        {msg?.ok && <div className="notice-ok"><CheckCircle2 size={18} />{msg.text}</div>}
-        <div className={`tf ${msg && !msg.ok ? 'err' : ''}`}>
-          <input id="np" type={show ? 'text' : 'password'} placeholder=" " value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} autoFocus />
-          <label htmlFor="np">New password</label>
-          <button type="button" className="tf-btn" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide password' : 'Show password'}>{show ? <EyeOff size={20} /> : <Eye size={20} />}</button>
+        <Mark />
+        <h1 className="title">New <em>password</em></h1>
+        <p className="lede">8+ characters with letters and numbers.</p>
+        {msg && <div className={`msg ${msg.ok ? 'okmsg' : ''}`}>{msg.ok ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}{msg.text}</div>}
+        <div className="inputs">
+          <div className="fx">
+            <input id="np" type={show ? 'text' : 'password'} placeholder=" " value={password} onChange={(e) => { setPassword(e.target.value); ctl.current.pulse(); }} required minLength={8} autoFocus />
+            <label htmlFor="np">New password</label>
+            <button type="button" className="fx-btn" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide password' : 'Show password'}>{show ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+          </div>
         </div>
-        {msg && !msg.ok && <div className="err-msg" role="alert"><AlertCircle size={16} />{msg.text}</div>}
-        <div className="actions">
-          <Link to="/login" className="glink">Back to sign in</Link>
-          <button className="gbtn" type="submit" disabled={!valid} onMouseDown={ripple}>Save</button>
-        </div>
+        <div className="meta"><span /><span /></div>
+        <button className="go" type="submit" disabled={!valid}>Save password <ArrowRight size={18} className="arrow" /></button>
+        <div className="demo"><Link to="/login" className="linkbtn">← Back to sign in</Link></div>
       </form>
     </Shell>
   );
