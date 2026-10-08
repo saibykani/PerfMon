@@ -170,8 +170,9 @@ Points are stored with source `otlp`.
 | `200 {}` | All data points accepted |
 | `200 {"partialSuccess": {"rejectedDataPoints": n, "errorMessage": "…"}}` | Some points were accepted, n were rejected (no run correlation, unknown run, no numeric value, or an unsupported type such as Summary) |
 | `400` `No data points could be correlated to a run: add the perfmon.run_id resource attribute or ?runId=<RUN_ID>` | Nothing was accepted because no point had a run |
-| `400` `run <id>: Run … not found` | The Run ID does not exist |
-| `401` / `403` | Missing or invalid key, key without `INGEST_METRICS`, or key bound to another project |
+| `400` `run <id>: Run '<id>' not found` | The Run ID does not exist |
+| `400` `run <id>: API key is not authorized for this project` | The key is bound to a different project than the run |
+| `401` / `403` | Missing or invalid key, or key without `INGEST_METRICS` |
 | `415` or `400` | The body is not JSON (protobuf). Set `encoding: json` |
 
 | Limit | Value |
@@ -195,9 +196,10 @@ Use these implemented paths when you need OTel-sourced metrics in Perfmon's stru
 
 | Goal | Recommended path | Chapter |
 |---|---|---|
-| Host CPU, memory, disk, network in the Infrastructure view | Perfmon Collector on the hosts, or `POST /api/v1/ingest/infrastructure` (`servers` array) | [Infrastructure Monitoring](17-infrastructure-monitoring.md) |
+| Host CPU, memory, disk, network in the Infrastructure view | Perfmon Collector on the hosts, or `POST /api/v1/ingest/infrastructure` (`server` object + `metrics` array) | [Infrastructure Monitoring](17-infrastructure-monitoring.md) |
 | JVM heap, GC, threads in the JVM view | `POST /api/v1/ingest/infrastructure` with the `jvm` array, from your own exporter | [JVM Monitoring](18-jvm-monitoring.md) |
-| Database connections and latency | `POST /api/v1/ingest/infrastructure` with the database payload, or a Prometheus exporter + import | [Database Monitoring](19-database-monitoring.md) |
+| Database connections and latency | `POST /api/v1/ingest/infrastructure` with the `database` array, or a Prometheus exporter + import | [Database Monitoring](19-database-monitoring.md) |
+| Service request rate, errors, latency in Applications Monitoring | `POST /api/v1/ingest/infrastructure` with a `service` object and the `serviceMetrics` array | [Infrastructure Monitoring](17-infrastructure-monitoring.md) |
 | Metrics your OTel Collector already sends to Prometheus | Add the Collector's Prometheus exporter (or remote write) to your Prometheus, then use the **Prometheus integration** to import them into the run with PromQL mappings to Perfmon metric names (`cpu_pct`, `heap_used_mb`, `request_rate`, ...) | [Prometheus Integration](32-prometheus-integration.md) |
 | Services monitored by Dynatrace | Dynatrace integration import | [Dynatrace Integration](33-dynatrace-integration.md) |
 | Custom business metrics (queue depth, cache hit rate) as tagged points | `POST /api/v1/metrics` with `{"runId", "metric", "value", "ts", "tags"}` items, or InfluxDB line protocol to `/api/v1/ingest/influx/write?runId=<RunID>` (any measurement other than `jmeter` is stored as `<measurement>.<field>` points) | [JMeter Integration](09-jmeter-integration.md#multi-run-and-dimensional-data-post-apiv1metrics) |
