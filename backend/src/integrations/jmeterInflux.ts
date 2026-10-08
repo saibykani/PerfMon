@@ -155,11 +155,12 @@ export async function fetchJmeterPoints(i: IntegrationRecord, c: Credentials, q:
   return out.concat(ev.map((p) => ({ ...p, measurement: 'events' })));
 }
 
-/** Median gap between distinct point timestamps, i.e. JMeter's send interval (seconds). */
+/** Median gap between distinct point timestamps (≥ 500 ms), i.e. JMeter's send interval (seconds). */
 export function inferIntervalSec(points: LinePoint[]): number {
   const ts = [...new Set(points.map((p) => p.timestamp ?? 0))].filter(Boolean).sort((a, b) => a - b);
   const gaps: number[] = [];
-  for (let k = 1; k < ts.length; k++) gaps.push(ts[k] - ts[k - 1]);
+  // Lines of one send are stamped a few ms apart (see groupSends); only gaps between sends count.
+  for (let k = 1; k < ts.length; k++) if (ts[k] - ts[k - 1] >= 500) gaps.push(ts[k] - ts[k - 1]);
   if (!gaps.length) return 5;
   gaps.sort((a, b) => a - b);
   const s = Math.round(gaps[gaps.length >> 1] / 1000);
