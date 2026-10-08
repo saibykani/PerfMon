@@ -7,6 +7,7 @@ import { buildApp, buildReportContentApp } from './app.js';
 import { startWorker } from './jobs/queue.js';
 import { aggregator } from './ingest/aggregator.js';
 import { startAlertLoop } from './alerts/evaluator.js';
+import { startKeepAwake } from './keepAwake.js';
 // job handlers (side-effect registration)
 import './analytics/finalize.js';
 import './artifacts/service.js';
@@ -28,6 +29,7 @@ async function main() {
 
   const app = await buildApp();
   await app.listen({ port: config.port, host: config.host });
+  startKeepAwake((m) => app.log.info(m));
   if (config.reportContentOrigin) {
     const content = await buildReportContentApp();
     await content.listen({ port: config.reportContentPort, host: config.host });

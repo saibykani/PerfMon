@@ -16,7 +16,7 @@ export function WakingBanner({ className = '' }: { className?: string }) {
   return (
     <div className={`waking ${className}`} role="status" aria-live="polite">
       <span className="waking-spin" aria-hidden="true" />
-      <span><b>Waking up the Perfmon server…</b> {secs}s — it sleeps when nobody has used it for a while and takes up to a minute to start. Your request continues automatically.</span>
+      <span><b>Connecting to Perfmon…</b> {secs}s — starting up, this usually takes under a minute. You don’t need to do anything.</span>
     </div>
   );
 }

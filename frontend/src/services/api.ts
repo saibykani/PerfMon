@@ -48,9 +48,9 @@ export function qs(q?: Query) {
 const wakeListeners = new Set<(waking: boolean) => void>();
 export const onApiWaking = (fn: (waking: boolean) => void) => { wakeListeners.add(fn); return () => { wakeListeners.delete(fn); }; };
 let waking: Promise<boolean> | null = null;
-const WAKE_MAX_MS = 150_000;
+const WAKE_MAX_MS = 5 * 60_000;
 
-/** Resolves true once the API answers /health (polling for up to ~2.5 minutes). */
+/** Resolves true once the API answers /health (polling for up to 5 minutes). */
 export function waitForApi(): Promise<boolean> {
   if (!waking) {
     wakeListeners.forEach((f) => f(true));
@@ -58,7 +58,7 @@ export function waitForApi(): Promise<boolean> {
       const start = Date.now();
       while (Date.now() - start < WAKE_MAX_MS) {
         try {
-          const r = await fetch(`${API_BASE}/api/v1/health`, { signal: AbortSignal.timeout(20_000), cache: 'no-store' });
+          const r = await fetch(`${API_BASE}/api/v1/health`, { signal: AbortSignal.timeout(60_000), cache: 'no-store' });
           if (r.ok) return true;
         } catch { /* still starting */ }
         await new Promise((r) => setTimeout(r, 3_000));
@@ -69,7 +69,7 @@ export function waitForApi(): Promise<boolean> {
   return waking;
 }
 
-const UNAVAILABLE = 'The Perfmon server is not responding right now. It was given 2½ minutes to start — please try again shortly.';
+const UNAVAILABLE = 'Perfmon is taking longer than usual to start. Please try again in a minute.';
 
 async function request<T>(method: string, path: string, body?: unknown, opts: { query?: Query; raw?: boolean; retried?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = {};

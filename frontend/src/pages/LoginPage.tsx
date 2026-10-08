@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Activity, AlertCircle, ArrowRight, CheckCircle2, Cpu, Eye, EyeOff, Gauge, Lock, Mail, MemoryStick, ShieldCheck, TriangleAlert, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuth } from '@/stores/auth';
-import { api, ApiError, API_BASE } from '@/services/api';
+import { api, ApiError, API_BASE, onApiWaking } from '@/services/api';
 import { LogoMark } from '@/components/Logo';
 import { WakingBanner } from '@/components/WakingBanner';
 import '@/styles/login.css';
@@ -159,7 +159,7 @@ function Shell({ children, ctl }: { children: ReactNode; ctl: MutableRefObject<S
               <Link to="/help">Help</Link><span>|</span>
               <a href={`${API_BASE}/api/docs`} target="_blank" rel="noreferrer">API docs</a><span>|</span>
               <span className={`api ${health.isError ? 'down' : up ? 'up' : ''}`} title="Measured round-trip to the Perfmon API">
-                <i />{health.isLoading ? 'Checking…' : up ? `API ${health.data!.ms} ms` : 'API offline'}
+                <i />{health.isLoading ? 'Connecting…' : up ? `API ${health.data!.ms} ms` : 'Connecting…'}
               </span>
             </footer>
           </div>
@@ -226,6 +226,8 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [errKey, setErrKey] = useState(0);
   const [state, setState] = useState<'idle' | 'busy' | 'done'>('idle');
+  const [waking, setWaking] = useState(false);
+  useEffect(() => onApiWaking(setWaking), []);
   const cfg = useQuery({ queryKey: ['auth-config'], queryFn: () => api.get<{ demo?: { email: string; password?: string } | null; googleClientId?: string | null }>('/auth/config'), retry: false, staleTime: Infinity });
 
   const fail = (err: unknown) => {
@@ -276,7 +278,7 @@ export function LoginPage() {
         </div>
         {caps && <div className="caps"><AlertCircle size={13} /> Caps Lock is on</div>}
         <button className={`go ${state === 'done' ? 'ok' : ''}`} type="submit" disabled={state !== 'idle'}>
-          {state === 'busy' && <span className="dots" aria-label="Signing in"><i /><i /><i /></span>}
+          {state === 'busy' && <><span className="dots" aria-hidden="true"><i /><i /><i /></span>{waking ? 'Connecting…' : 'Signing in…'}</>}
           {state === 'done' && <><svg className="tick" width="18" height="18" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>Signed in</>}
           {state === 'idle' && <>Sign in <ArrowRight size={17} className="arrow" /></>}
         </button>
