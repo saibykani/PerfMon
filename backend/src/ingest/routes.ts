@@ -122,7 +122,7 @@ interface JmeterRow { txn: string; ts: number; kind: string; data: Record<string
  * Sends are ≥ 1 s apart, so lines within 500 ms of a group's first line (and not
  * repeating a kind already in it) belong to the same send.
  */
-function groupSends(rows: JmeterRow[]): Record<string, Record<string, any>>[] {
+export function groupSends(rows: JmeterRow[]): Record<string, Record<string, any>>[] {
   const byTxn = new Map<string, JmeterRow[]>();
   for (const r of rows) (byTxn.get(r.txn) ?? byTxn.set(r.txn, []).get(r.txn)!).push(r);
   const out: Record<string, Record<string, any>>[] = [];

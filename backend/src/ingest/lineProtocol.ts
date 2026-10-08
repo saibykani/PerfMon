@@ -36,12 +36,15 @@ function parseFieldValue(v: string): number | string | boolean {
   return Number.isFinite(n) ? n : v;
 }
 
-const PRECISION_DIV: Record<string, number> = { n: 1e6, ns: 1e6, u: 1e3, us: 1e3, ms: 1, s: 1 / 1000, m: 1 / 60000, h: 1 / 3600000 };
+// ns/us divide; s/m/h multiply (dividing by 1/1000 etc. produced fractional epoch ms, e.g. 2h → 7200000.000000001)
+const PRECISION_DIV: Record<string, number> = { n: 1e6, ns: 1e6, u: 1e3, us: 1e3, ms: 1 };
+const PRECISION_MUL: Record<string, number> = { s: 1000, m: 60000, h: 3600000 };
 
 export function toEpochMs(raw: string, precision?: string): number {
   const n = Number(raw);
   if (!Number.isFinite(n)) return NaN;
   if (precision && PRECISION_DIV[precision] !== undefined) return n / PRECISION_DIV[precision];
+  if (precision && PRECISION_MUL[precision] !== undefined) return n * PRECISION_MUL[precision];
   // auto-detect by magnitude
   if (n > 1e17) return n / 1e6; // ns
   if (n > 1e14) return n / 1e3; // us
@@ -74,7 +77,9 @@ export function parseLineProtocol(body: string, precision?: string): { points: L
         if (idx < 0) throw new Error(`bad field '${f}'`);
         fields[unescape(f.slice(0, idx))] = parseFieldValue(f.slice(idx + 1));
       }
-      points.push({ measurement, tags, fields, timestamp: ts ? toEpochMs(ts, precision) : null });
+      const timestamp = ts ? toEpochMs(ts, precision) : null;
+      if (timestamp !== null && !Number.isFinite(timestamp)) throw new Error(`bad timestamp '${ts}'`);
+      points.push({ measurement, tags, fields, timestamp });
     } catch (e) {
       if (errors.length < 20) errors.push(`line ${ln + 1}: ${(e as Error).message}`);
     }
