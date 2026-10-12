@@ -81,7 +81,8 @@ export function ReportViewPage() {
             ]} />
             {c && <nav className="rp-toc" aria-label="Report sections">
               <div className="muted small">Sections</div>
-              {c.sections.map((s) => <span key={s.id}>{s.title}</span>)}
+              {(c.sections.some((s) => s.kind === 'chapter') ? c.sections.filter((s) => s.kind === 'chapter') : c.sections)
+                .map((s, i) => <span key={s.id}><span className="muted">{i + 1}</span>&nbsp;&nbsp;{s.title}</span>)}
             </nav>}
           </div>
         </aside>

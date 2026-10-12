@@ -5,14 +5,15 @@ import { Download, FileJson, FileSpreadsheet, FileText, Globe, Loader2, Table2 }
 import { api, download } from '@/services/api';
 import { Modal, Field } from '@/components/ui';
 import { RunSearch, RunChips, Segmented, type RunLite } from '@/components/analysis/shared';
-import { useProjects } from '@/components/inventory/data';
+import { useProjects, useTests } from '@/components/inventory/data';
 import { toast, friendlyError } from '@/components/inventory/common';
 import { useFilters } from '@/stores/filters';
 import '@/styles/reports.css';
 
 /* ------------------------------------------------------------------ types */
 
-export type ReportType = 'TEST_EXECUTION' | 'COMPARISON' | 'EXECUTIVE' | string;
+export type ReportType = 'TEST_EXECUTION' | 'COMPARISON' | 'EXECUTIVE' | 'SLA' | 'TREND' | string;
+type NewType = 'TEST_EXECUTION' | 'COMPARISON' | 'EXECUTIVE' | 'SLA' | 'TREND';
 export type ReportStatus = 'QUEUED' | 'GENERATING' | 'READY' | 'FAILED';
 
 export interface ReportRow {
@@ -31,10 +32,12 @@ export interface ReportContent {
 }
 export interface ReportDetail extends ReportRow { content: ReportContent | null }
 
-export const REPORT_TYPES: { key: 'TEST_EXECUTION' | 'COMPARISON' | 'EXECUTIVE'; label: string; hint: string }[] = [
-  { key: 'TEST_EXECUTION', label: 'Test execution', hint: 'One run: identity, result & score, KPIs vs baseline, SLA, transactions, errors, regressions, bottlenecks, infrastructure.' },
-  { key: 'COMPARISON', label: 'Comparison', hint: '2–6 runs side by side. The first run is the reference for change %.' },
-  { key: 'EXECUTIVE', label: 'Executive summary', hint: 'A project over a time window: pass rate, SLA compliance, trends, regressions and slowest transactions.' },
+export const REPORT_TYPES: { key: NewType; label: string; hint: string }[] = [
+  { key: 'TEST_EXECUTION', label: 'Test execution', hint: 'One run in depth: executive summary, configuration & environment, results over time, percentiles, every transaction, errors, SLA rule by rule, baseline deltas, infrastructure, insights, capacity estimate and appendix.' },
+  { key: 'COMPARISON', label: 'Comparison', hint: '2–6 runs side by side: KPI table with deltas, overlaid time series, per-transaction deltas, SLA pass rate and regressions. The first run is the reference for change %.' },
+  { key: 'EXECUTIVE', label: 'Executive summary', hint: 'A project over a time window: pass rate by test, SLA compliance, KPI trends, top risks, regressions and slowest transactions.' },
+  { key: 'SLA', label: 'SLA compliance', hint: 'SLA compliance across the runs of a project (optionally one test) in a period: compliance over time, by test, by rule and by transaction, and every violation.' },
+  { key: 'TREND', label: 'Trend', hint: 'KPI trends across the completed runs of one test: response time, throughput, errors, SLA and score per run, trend signals, transaction P95 trends and a capacity estimate.' },
 ];
 export const typeLabel = (t: string) => REPORT_TYPES.find((x) => x.key === t)?.label ?? t.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase());
 export const isPending = (s?: string | null) => s === 'QUEUED' || s === 'GENERATING';
@@ -91,12 +94,12 @@ export function DownloadButtons({ report, compact, disabled }: { report: Pick<Re
 const RANGES = [{ key: '7', label: '7 days' }, { key: '30', label: '30 days' }, { key: '90', label: '90 days' }, { key: 'custom', label: 'Custom' }] as const;
 const day = (d: Date) => d.toISOString().slice(0, 10);
 
-export function NewReportDialog({ open, onClose, initialRun, initialType = 'TEST_EXECUTION' }: { open: boolean; onClose: () => void; initialRun?: RunLite | null; initialType?: 'TEST_EXECUTION' | 'COMPARISON' | 'EXECUTIVE' }) {
+export function NewReportDialog({ open, onClose, initialRun, initialType = 'TEST_EXECUTION' }: { open: boolean; onClose: () => void; initialRun?: RunLite | null; initialType?: NewType }) {
   const nav = useNavigate();
   const qc = useQueryClient();
   const filters = useFilters();
   const projects = useProjects();
-  const [type, setType] = useState<'TEST_EXECUTION' | 'COMPARISON' | 'EXECUTIVE'>(initialType);
+  const [type, setTypeRaw] = useState<NewType>(initialType);
   const [run, setRun] = useState<RunLite | null>(initialRun ?? null);
   const [runs, setRuns] = useState<RunLite[]>(initialRun ? [initialRun] : []);
   const [projectId, setProjectId] = useState<string>(filters.projectId ?? '');
@@ -104,17 +107,23 @@ export function NewReportDialog({ open, onClose, initialRun, initialType = 'TEST
   const [from, setFrom] = useState(day(new Date(Date.now() - 30 * 86400e3)));
   const [to, setTo] = useState(day(new Date()));
   const [title, setTitle] = useState('');
+  const [testId, setTestId] = useState<string>(initialRun?.testId ?? '');
   const effProject = projectId || projects.data?.[0]?.id || '';
+  const tests = useTests({ projectId: effProject || null });
+  const periodic = type === 'EXECUTIVE' || type === 'SLA' || type === 'TREND';
+  // trends need a longer window by default
+  const setType = (t: NewType) => { setTypeRaw(t); if (t === 'TREND' && range === '30') setRange('90'); };
+  const effTest = type === 'TREND' ? testId || tests.data?.[0]?.id || '' : testId;
 
   const create = useMutation({
     mutationFn: () => {
       const body: Record<string, unknown> = { type, title: title.trim() || undefined };
       if (type === 'TEST_EXECUTION') Object.assign(body, { runId: run!.runId, projectId: run!.projectId });
       if (type === 'COMPARISON') body.runIds = runs.map((r) => r.runId);
-      if (type === 'EXECUTIVE') {
+      if (periodic) {
         const t = range === 'custom' ? new Date(`${to}T23:59:59`) : new Date();
         const f = range === 'custom' ? new Date(`${from}T00:00:00`) : new Date(t.getTime() - Number(range) * 86400e3);
-        Object.assign(body, { projectId: effProject, params: { from: f.toISOString(), to: t.toISOString() } });
+        Object.assign(body, { projectId: effProject, params: { from: f.toISOString(), to: t.toISOString(), ...(effTest ? { testId: effTest } : {}) } });
       }
       return api.post<{ id: string; version: number }>('/reports', body);
     },
@@ -127,7 +136,8 @@ export function NewReportDialog({ open, onClose, initialRun, initialType = 'TEST
     onError: (e) => toast.error(friendlyError(e)),
   });
 
-  const valid = type === 'TEST_EXECUTION' ? !!run : type === 'COMPARISON' ? runs.length >= 2 && runs.length <= 6 : !!effProject && (range !== 'custom' || (!!from && !!to && from <= to));
+  const valid = type === 'TEST_EXECUTION' ? !!run : type === 'COMPARISON' ? runs.length >= 2 && runs.length <= 6
+    : !!effProject && (type !== 'TREND' || !!effTest) && (range !== 'custom' || (!!from && !!to && from <= to));
   const hint = REPORT_TYPES.find((t) => t.key === type)?.hint;
 
   return (
@@ -162,13 +172,22 @@ export function NewReportDialog({ open, onClose, initialRun, initialType = 'TEST
           </Field>
         )}
 
-        {type === 'EXECUTIVE' && (
+        {periodic && (
           <>
             <Field label="Project">
-              <select className="select" value={effProject} onChange={(e) => setProjectId(e.target.value)} aria-label="Project">
+              <select className="select" value={effProject} onChange={(e) => { setProjectId(e.target.value); setTestId(''); }} aria-label="Project">
                 {projects.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </Field>
+            {(type === 'TREND' || type === 'SLA') && (
+              <Field label={type === 'TREND' ? 'Test' : 'Test (optional)'} hint={type === 'TREND' ? 'Trends are computed across the completed runs of this test.' : 'Leave empty to cover every test in the project.'}>
+                <select className="select" value={effTest} onChange={(e) => setTestId(e.target.value)} aria-label="Test" disabled={tests.isLoading}>
+                  {type === 'SLA' && <option value="">All tests</option>}
+                  {type === 'TREND' && !tests.data?.length && <option value="">{tests.isLoading ? 'Loading tests…' : 'No tests in this project'}</option>}
+                  {tests.data?.map((t) => <option key={t.id} value={t.id}>{t.name}{t.environment_name ? ` · ${t.environment_name}` : ''}</option>)}
+                </select>
+              </Field>
+            )}
             <Field label="Period">
               <div className="row wrap" style={{ gap: 8 }}>
                 <Segmented label="Period" value={range} onChange={setRange} options={RANGES.map((r) => ({ key: r.key, label: r.label }))} />

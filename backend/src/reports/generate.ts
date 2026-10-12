@@ -1,20 +1,24 @@
 import { one, query } from '../db/pool.js';
 import { registerJob, enqueue } from '../jobs/queue.js';
-import { buildTestExecutionContent, buildComparisonContent, buildExecutiveContent } from './content.js';
+import { buildTestExecutionContent, buildComparisonContent, buildExecutiveContent, buildSlaContent, buildTrendContent } from './content.js';
 
-export const GENERATABLE_TYPES = ['TEST_EXECUTION', 'COMPARISON', 'EXECUTIVE'] as const;
+export const GENERATABLE_TYPES = ['TEST_EXECUTION', 'COMPARISON', 'EXECUTIVE', 'SLA', 'TREND'] as const;
 export type ReportType = (typeof GENERATABLE_TYPES)[number];
 
 export interface ReportParams {
   runIds?: string[];            // COMPARISON (ordered; first = reference)
-  from?: string; to?: string;   // EXECUTIVE window (ISO)
+  from?: string; to?: string;   // EXECUTIVE / SLA / TREND window (ISO)
   testId?: string | null; environmentId?: string | null;
   subjectKey?: string;          // versioning key (see 004 migration index)
   auto?: boolean;
 }
 
 const subjectKey = (type: ReportType, projectId: string, runId: string | null, p: ReportParams) =>
-  type === 'TEST_EXECUTION' ? `run:${runId}` : type === 'COMPARISON' ? `runs:${(p.runIds ?? []).join(',')}` : `project:${projectId}|${p.testId ?? '*'}|${p.environmentId ?? '*'}`;
+  type === 'TEST_EXECUTION' ? `run:${runId}`
+    : type === 'COMPARISON' ? `runs:${(p.runIds ?? []).join(',')}`
+    : type === 'TREND' ? `trend:${p.testId ?? '*'}|${p.environmentId ?? '*'}`
+    : type === 'SLA' ? `sla:${projectId}|${p.testId ?? '*'}|${p.environmentId ?? '*'}`
+    : `project:${projectId}|${p.testId ?? '*'}|${p.environmentId ?? '*'}`;
 
 /**
  * Creates a QUEUED report row (version N+1 for the same type + subject) and enqueues generation.
@@ -47,13 +51,20 @@ async function generate(reportId: string, attempts: number, maxAttempts: number)
     } else if (rep.type === 'COMPARISON') {
       if (!p.runIds || p.runIds.length < 2) throw new Error('Comparison report needs at least two runs');
       content = await buildComparisonContent(p.runIds, rep.version, rep.title);
-    } else if (rep.type === 'EXECUTIVE') {
+    } else if (rep.type === 'EXECUTIVE' || rep.type === 'SLA' || rep.type === 'TREND') {
       const to = p.to ? new Date(p.to) : new Date(rep.created_at);
-      const from = p.from ? new Date(p.from) : new Date(to.getTime() - 30 * 86400000);
-      content = await buildExecutiveContent({ orgId: rep.organization_id, projectId: rep.project_id, from, to, testId: p.testId, environmentId: p.environmentId }, rep.version, rep.title);
+      const from = p.from ? new Date(p.from) : new Date(to.getTime() - (rep.type === 'TREND' ? 90 : 30) * 86400000);
+      const scope = { orgId: rep.organization_id, projectId: rep.project_id, from, to, testId: p.testId, environmentId: p.environmentId };
+      if (rep.type === 'EXECUTIVE') content = await buildExecutiveContent(scope, rep.version, rep.title);
+      else if (rep.type === 'SLA') content = await buildSlaContent(scope, rep.version, rep.title);
+      else {
+        if (!p.testId) throw new Error('Trend report needs a test');
+        content = await buildTrendContent({ ...scope, testId: p.testId }, rep.version, rep.title);
+      }
     } else {
       throw new Error(`Report type ${rep.type} cannot be generated yet`);
     }
+    content.reportId = reportId;
     await query(`UPDATE reports SET status = 'READY', content = $2, error = NULL, updated_at = now() WHERE id = $1`, [reportId, JSON.stringify(content)]);
     return { reportId, status: 'READY', sections: content.sections.length };
   } catch (e) {

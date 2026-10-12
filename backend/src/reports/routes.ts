@@ -15,7 +15,7 @@ const MIME: Record<(typeof FORMATS)[number], string> = {
   html: 'text/html; charset=utf-8', pdf: 'application/pdf', csv: 'text/csv; charset=utf-8', json: 'application/json; charset=utf-8',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
-const TYPE_LABEL: Record<string, string> = { TEST_EXECUTION: 'Test Execution Report', COMPARISON: 'Comparison Report', EXECUTIVE: 'Executive Summary' };
+const TYPE_LABEL: Record<string, string> = { TEST_EXECUTION: 'Test Execution Report', COMPARISON: 'Comparison Report', EXECUTIVE: 'Executive Summary', SLA: 'SLA Compliance Report', TREND: 'Trend Report' };
 
 const SELECT = `
   SELECT rp.id, rp.project_id, rp.run_id, rp.type, rp.title, rp.version, rp.status, rp.params, rp.error, rp.created_by, rp.created_at, rp.updated_at,
@@ -89,7 +89,7 @@ export async function reportRoutes(app: FastifyInstance) {
     ...exportPerm,
     schema: {
       tags: ['Reports'], summary: 'Generate a report (queued; poll GET /reports/:id until READY)',
-      description: 'TEST_EXECUTION: runId. COMPARISON: runIds (2–6, first is the reference). EXECUTIVE: projectId + optional from/to (default last 30 days), testId, environmentId. Re-generating the same subject creates version N+1.',
+      description: 'TEST_EXECUTION: runId. COMPARISON: runIds (2–6, first is the reference). EXECUTIVE and SLA: projectId + optional from/to (default last 30 days), testId, environmentId. TREND: params.testId (+ optional from/to, default last 90 days, environmentId). Re-generating the same subject creates version N+1.',
       body: z.object({
         type: z.enum(GENERATABLE_TYPES), projectId: z.string().uuid().optional(), runId: z.string().optional(), runIds: z.array(z.string()).min(2).max(6).optional(),
         title: z.string().trim().min(1).max(200).optional(),
@@ -120,18 +120,26 @@ export async function reportRoutes(app: FastifyInstance) {
       params.runIds = refs.map((x) => x.id); params.runKeys = refs.map((x) => x.runKey);
       title = b.title ?? `${TYPE_LABEL.COMPARISON} — ${refs.map((x) => x.runKey).join(' vs ')}`;
     } else {
-      const pid = b.projectId ?? p.projectId;
-      if (!pid) throw badRequest('projectId is required for an EXECUTIVE report');
+      let pid = b.projectId ?? p.projectId;
+      let testName: string | null = null;
+      if (b.type === 'TREND') {
+        if (!b.params?.testId) throw badRequest('params.testId is required for a TREND report');
+        const t = await one(`SELECT t.name, t.project_id FROM performance_tests t JOIN projects pr ON pr.id = t.project_id WHERE t.id = $1 AND pr.organization_id = $2`, [b.params.testId, p.orgId]);
+        if (!t) throw badRequest('Test not found');
+        if (pid && pid !== t.project_id) throw badRequest('Test does not belong to this project');
+        pid = t.project_id; testName = t.name;
+      }
+      if (!pid) throw badRequest(`projectId is required for an ${b.type} report`);
       const proj = await assertProject(req, pid);
       projectId = proj.id;
       const to = parseTime(b.params?.to) ?? new Date();
-      const from = parseTime(b.params?.from) ?? new Date(to.getTime() - 30 * 86400000);
+      const from = parseTime(b.params?.from) ?? new Date(to.getTime() - (b.type === 'TREND' ? 90 : 30) * 86400000);
       if (from >= to) throw badRequest('`from` must be before `to`');
       if (b.params?.testId && !(await one(`SELECT 1 FROM performance_tests WHERE id = $1 AND project_id = $2`, [b.params.testId, projectId]))) throw badRequest('Test does not belong to this project');
       if (b.params?.environmentId && !(await one(`SELECT 1 FROM environments WHERE id = $1 AND project_id = $2`, [b.params.environmentId, projectId]))) throw badRequest('Environment does not belong to this project');
       Object.assign(params, { from: from.toISOString(), to: to.toISOString(), testId: b.params?.testId ?? null, environmentId: b.params?.environmentId ?? null });
       const name = (await one(`SELECT name FROM projects WHERE id = $1`, [projectId]))?.name ?? 'Project';
-      title = b.title ?? `${TYPE_LABEL.EXECUTIVE} — ${name} (${from.toISOString().slice(0, 10)} to ${to.toISOString().slice(0, 10)})`;
+      title = b.title ?? `${TYPE_LABEL[b.type]} — ${testName ?? name} (${from.toISOString().slice(0, 10)} to ${to.toISOString().slice(0, 10)})`;
     }
     const row = await createReport({ type: b.type, projectId, runId, title, params, createdBy: p.kind === 'user' ? p.id : null, priority: 3 });
     await audit(req, { action: 'report.create', resourceType: 'report', resourceId: row.id, details: { type: b.type, title, version: row.version, runId: params.runKeys?.[0] ?? null, runKeys: params.runKeys, projectId } });

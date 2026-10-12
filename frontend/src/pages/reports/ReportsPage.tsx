@@ -55,7 +55,7 @@ export function ReportsPage() {
     { key: 'subject', header: 'Run / project', sortable: false, value: (r) => r.runKeys.join(' ') || r.projectName, render: (r) => (
       <span className="rp-subject">
         {r.runKeys.length ? r.runKeys.map((k) => <Link key={k} className="mono" to={`/runs/${k}`} onClick={(e) => e.stopPropagation()}>{k}</Link>) : null}
-        <span className="muted small">{r.projectName}{r.type === 'EXECUTIVE' && r.params.from && r.params.to ? ` · ${r.params.from.slice(0, 10)} → ${r.params.to.slice(0, 10)}` : ''}</span>
+        <span className="muted small">{r.projectName}{r.params.from && r.params.to && !r.runKeys.length ? ` · ${r.params.from.slice(0, 10)} → ${r.params.to.slice(0, 10)}` : ''}</span>
       </span>) },
     { key: 'createdBy', header: 'Created by', sortable: false, render: (r) => r.createdBy ?? '—' },
     { key: 'created', header: 'Created', sortable: false, value: (r) => r.createdAt, render: (r) => <span title={fmtDate(r.createdAt)}>{fmtRelative(r.createdAt)}</span> },
@@ -69,7 +69,7 @@ export function ReportsPage() {
   return (
     <div>
       <Toaster />
-      <PageHeader title="Reports" subtitle="Test execution, comparison and executive reports generated from stored run analysis — downloadable as PDF, HTML, Excel, CSV or JSON."
+      <PageHeader title="Reports" subtitle="Test execution, comparison, executive, SLA compliance and trend reports generated from stored run analysis — downloadable as PDF, HTML, Excel, CSV or JSON."
         actions={can('EXPORT_REPORT') && <button className="btn btn-primary" onClick={() => setCreating(true)}><FilePlus2 size={15} />New report</button>} />
       <ErrorBox error={error} />
       <div className="card">
@@ -92,7 +92,7 @@ export function ReportsPage() {
           </>}
           empty={<EmptyState icon={<FileText size={20} />} title={filtered ? 'No reports match these filters' : 'No reports yet'}
             action={!filtered && can('EXPORT_REPORT') && <button className="btn btn-primary" onClick={() => setCreating(true)}><FilePlus2 size={14} />New report</button>}>
-            {filtered ? 'Clear a filter or search by title or Run ID.' : 'A test execution report is generated automatically when a run finishes. Create comparison or executive reports on demand.'}
+            {filtered ? 'Clear a filter or search by title or Run ID.' : 'A test execution report is generated automatically when a run finishes. Create comparison, executive, SLA compliance or trend reports on demand.'}
           </EmptyState>} />
       </div>
       {creating && <NewReportDialog open onClose={() => { setCreating(false); if (params.get('new')) setParam('new', ''); }} />}
