@@ -74,7 +74,7 @@ export function StatsTable({ q, panels, defs, title = 'Statistics for the window
     try { for (const g of groups) await downloadTableCsv({ ...q, filters: g.filters }, { metrics: g.metrics }); } catch (e) { toast.error(`CSV export failed: ${(e as Error).message}`); }
   };
   return (
-    <Card title={title} noPad actions={<button className="btn btn-sm" onClick={csv} disabled={!groups.length}><FileDown size={13} />CSV</button>}>
+    <Card title={title} noPad actions={<button className="btn btn-sm" onClick={csv} disabled={!groups.length} title="Full statistics table from the server (format=csv)"><FileDown size={13} />Download CSV</button>}>
       {error && <div className="obs-err small" style={{ padding: '8px 12px' }}>{error.message}</div>}
       <DataTable rows={rows} columns={cols} rowKey={(r) => r.key} loading={loading} exportName="observability-stats" maxHeight={420} initialSort={{ key: 'max', order: 'desc' }}
         empty={groups.length ? 'No samples for these filters in this window' : 'Add a panel to see statistics'} />

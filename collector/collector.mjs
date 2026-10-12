@@ -111,9 +111,7 @@ export function parseJstat(text) {
   if (lines.length < 2) return null;
   const h = lines[0].trim().split(/\s+/);
   const v = lines[lines.length - 1].trim().split(/\s+/).map((x) => Number(x.replace(',', '.')));
-  if (h.length !== v.length || v.some((x) => !Number.isFinite(x) && x !== undefined)) {
-    // jstat prints "-" for unavailable columns
-  }
+  // jstat prints "-" for unavailable columns → null
   const out = {};
   h.forEach((k, i) => { out[k] = Number.isFinite(v[i]) ? v[i] : null; });
   return out;
@@ -308,7 +306,7 @@ function findJstat() {
 
 // ------------------------------------------------------------------ agent
 
-const HELP = `Perfmon Collector — host and load-generator metrics agent
+const HELP = `Perfmon Collector - host and load-generator metrics agent
 Usage: node perfmon-collector.mjs [--url URL] [--key KEY] [--run-id RUN] [--role loadgen] [--interval 5] [--once] ...
 See the header of this file (or the "Load generator monitoring" chapter of the user manual) for every option.`;
 
@@ -339,7 +337,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       if (found) {
         jm = { ...found, xmxMb: parseXmx(found.cmdline), cap: null, prevCpuMs: null, prevT: null, prevGcSec: null, prevGcCount: null };
         if (jstatPath) { const c = await run(jstatPath, ['-gccapacity', String(found.pid)]); jm.cap = c ? parseJstat(c) : null; }
-        log(`JMeter process found: pid ${found.pid}${jm.xmxMb ? `, -Xmx ${jm.xmxMb} MB` : ''}${jstatPath ? '' : ' (jstat not found — JVM heap not reported)'}`);
+        log(`JMeter process found: pid ${found.pid}${jm.xmxMb ? `, -Xmx ${jm.xmxMb} MB` : ''}${jstatPath ? '' : ' (jstat not found - JVM heap not reported)'}`);
       }
     }
     if (!jm) return {};
@@ -357,7 +355,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         const gcCount = jm.prevGcCount != null ? Math.max(0, h.gcCount - jm.prevGcCount) : null;
         jm.prevGcSec = h.gcTimeSec; jm.prevGcCount = h.gcCount;
         out.jvm = { ts: now, heapUsedMb: h.heapUsedMb, heapCommittedMb: h.heapCommittedMb, heapMaxMb: h.heapMaxMb, nonHeapUsedMb: h.nonHeapUsedMb, gcCount, gcTimeMs };
-      } else warnOnce('jstat', `jstat -gc ${jm.pid} returned no data — JVM heap not reported`);
+      } else warnOnce('jstat', `jstat -gc ${jm.pid} returned no data - JVM heap not reported`);
     }
     return out;
   }
@@ -386,7 +384,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     // local warnings (once per crossing)
     const heapPct = j.jvm?.heapUsedMb != null && (j.jvm.heapMaxMb || j.jvm.heapCommittedMb) ? (j.jvm.heapUsedMb / (j.jvm.heapMaxMb || j.jvm.heapCommittedMb)) * 100 : null;
     for (const [k, v, t] of [['CPU', host.cpuPct, cfg.cpuWarn], ['memory', host.memoryPct, cfg.memWarn], ['JMeter heap', heapPct, cfg.heapWarn]]) {
-      if (v != null && v >= t && !warned[k]) { warned[k] = true; warn(`WARNING ${k} ${v.toFixed(1)}% ≥ ${t}% — the load generator may be saturated`); }
+      if (v != null && v >= t && !warned[k]) { warned[k] = true; warn(`WARNING ${k} ${v.toFixed(1)}% >= ${t}% - the load generator may be saturated`); }
       if (v != null && v < t) warned[k] = false;
     }
     return { host, ...j };
@@ -402,7 +400,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
 
   const buffer = new BoundedBuffer(cfg.bufferMax);
-  let failures = 0, nextSendAt = 0, reportedDropped = 0, stopping = false, sending = false;
+  let failures = 0, nextSendAt = 0, reportedDropped = 0, stopping = false, sending = false, inflight = null;
 
   async function flush(force = false) {
     if (sending || !buffer.length) return true;
@@ -419,13 +417,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           });
         } catch (e) { res = { ok: false, status: 0, text: async () => e?.cause?.code ?? e?.message ?? String(e) }; }
         if (res.ok) {
-          if (failures) log(`Perfmon reachable again — sent ${batch.length} buffered samples`);
+          if (failures) log(`Perfmon reachable again - sent ${batch.length} buffered samples`);
           failures = 0; nextSendAt = 0;
           continue;
         }
         const detail = (await res.text().catch(() => '')).slice(0, 300);
         if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
-          warn(`Perfmon rejected ${batch.length} samples (HTTP ${res.status}): ${detail}${res.status === 401 || res.status === 403 ? ' — check PERFMON_API_KEY (scope "ingest")' : ''}`);
+          warn(`Perfmon rejected ${batch.length} samples (HTTP ${res.status}): ${detail}${res.status === 401 || res.status === 403 ? ' - check PERFMON_API_KEY (scope "ingest")' : ''}`);
           continue; // not retryable — drop this batch
         }
         buffer.unshift(batch);
@@ -438,21 +436,22 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       return true;
     } finally {
       sending = false;
-      if (buffer.dropped > reportedDropped) { warn(`buffer full — dropped ${buffer.dropped - reportedDropped} oldest samples (${buffer.dropped} in total)`); reportedDropped = buffer.dropped; }
+      if (buffer.dropped > reportedDropped) { warn(`buffer full - dropped ${buffer.dropped - reportedDropped} oldest samples (${buffer.dropped} in total)`); reportedDropped = buffer.dropped; }
     }
   }
 
   async function stop(reason) {
     if (stopping) return;
     stopping = true;
-    log(`stopping (${reason}) — flushing ${buffer.length} samples`);
+    if (inflight) await Promise.race([inflight, new Promise((r) => setTimeout(r, 15000))]); // finish the sample being taken
+    log(`stopping (${reason}) - flushing ${buffer.length} samples`);
     for (let i = 0; i < 3 && buffer.length; i++) { if (await flush(true)) break; await new Promise((r) => setTimeout(r, 1000)); }
     if (buffer.length) warn(`${buffer.length} samples could not be delivered`);
     log(`stopped${buffer.dropped ? ` (${buffer.dropped} samples dropped while Perfmon was unreachable)` : ''}`);
     process.exit(0);
   }
 
-  log(`server "${cfg.server}" (role ${cfg.role}) → ${cfg.url} every ${cfg.interval}s${cfg.runId ? `, run ${cfg.runId}` : cfg.env ? `, environment ${cfg.env}` : ''}`);
+  log(`server "${cfg.server}" (role ${cfg.role}) -> ${cfg.url} every ${cfg.interval}s${cfg.runId ? `, run ${cfg.runId}` : cfg.env ? `, environment ${cfg.env}` : ''}`);
   log(`host: ${hostInfo.os}, ${hostInfo.cores} cores, ${hostInfo.memoryMb} MB; JMeter metrics ${cfg.jmeter ? `on${cfg.jmeterPid ? ` (pid ${cfg.jmeterPid})` : ' (auto-detect)'}${jstatPath ? `, jstat ${jstatPath}` : ', jstat not found'}` : 'off'}${cfg.stopFile ? `; stop file ${cfg.stopFile}` : ''}`);
 
   process.on('SIGINT', () => stop('SIGINT'));
@@ -468,10 +467,14 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const tick = async () => {
     if (stopping) return;
     const t0 = Date.now();
+    let done;
+    inflight = new Promise((r) => { done = r; });
     try {
       buffer.push(await sample());
+      done();
       if (++n % cfg.batch === 0 || failures) await flush();
     } catch (e) { warn('sample failed (continuing):', e?.message ?? e); }
+    finally { done(); inflight = null; }
     if (!stopping) setTimeout(tick, Math.max(200, cfg.interval * 1000 - (Date.now() - t0)));
   };
   setTimeout(tick, cfg.interval * 1000);

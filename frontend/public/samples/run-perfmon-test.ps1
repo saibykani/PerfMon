@@ -18,6 +18,8 @@ param(
   [string[]]$JMeterArgs = @()
 )
 $ErrorActionPreference = 'Stop'
+# 'powershell -File' passes -JMeterArgs "-Ja=1","-Jb=2" as one comma-joined string: split it back into arguments
+$JMeterArgs = @($JMeterArgs | ForEach-Object { $_ -split ',(?=-)' } | Where-Object { $_ })
 foreach ($v in 'PERFMON_URL', 'PERFMON_API_KEY', 'PERFMON_PROJECT', 'PERFMON_APPLICATION', 'PERFMON_ENVIRONMENT', 'PERFMON_TEST') {
   if (-not [Environment]::GetEnvironmentVariable($v)) { throw "Set the environment variable $v" }
 }
@@ -82,7 +84,7 @@ try {
 } finally { Stop-Collector }
 
 function Send-Artifact([string]$Kind, [string]$File) {
-  if (-not (Test-Path $File)) { Write-Host "  (skipped $Kind: $File not found)"; return }
+  if (-not (Test-Path $File)) { Write-Host "  (skipped ${Kind}: $File not found)"; return }
   # curl.exe ships with Windows 10+ and handles multipart uploads on every PowerShell version
   $code = & curl.exe -s -o NUL -w '%{http_code}' -H "authorization: Bearer $($env:PERFMON_API_KEY)" -F "kind=$Kind" -F "file=@$File" "$api/runs/$runId/artifacts"
   if ($code -in '200', '201') { Write-Host "  OK uploaded $Kind" } else { Write-Host "  FAILED upload of $Kind (HTTP $code)" }

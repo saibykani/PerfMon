@@ -5,6 +5,7 @@ import { Bookmark, Compass, FileText, Link2, Plus, Settings2, Trash2, X } from '
 import { api } from '@/services/api';
 import { Card, Field, Modal, PageHeader } from '@/components/ui';
 import { Drawer, Toaster, friendlyError, toast } from '@/components/inventory/common';
+import { useProjects } from '@/components/inventory/data';
 import { useObsFilters, useObsRange } from '@/stores/obsFilters';
 import { ObsFilterBar } from '@/components/observability/ObsFilterBar';
 import { MetricPicker, ObsPanel, newPanelId, type PanelCfg } from '@/components/observability/ObsPanel';
@@ -88,7 +89,7 @@ export function ObservabilityPage() {
           <button className="btn" onClick={() => setPicking(true)}><Plus size={14} />Add panel</button>
           <ViewsMenu onCopyFixed={() => copyLink(true)} />
           <button className="btn" onClick={() => copyLink(false)} title="Copy a shareable link to this view"><Link2 size={14} />Copy link</button>
-          <button className="btn" onClick={() => setCollection(true)} title="Continuous collection"><Settings2 size={14} /><span className="obs-hide-sm">Collection</span></button>
+          <button className="btn" onClick={() => setCollection(true)} title="Continuous collection" aria-label="Continuous collection"><Settings2 size={14} /><span className="obs-hide-sm">Collection</span></button>
           <button className="btn btn-primary" onClick={() => setReportOpen(true)} disabled={!allMetrics.length} title={allMetrics.length ? 'Generate a report for this window' : 'Add a panel first'}><FileText size={14} />Generate report</button>
         </>} />
 
@@ -189,13 +190,15 @@ function ReportDialog({ open, onClose, from, to, metrics }: { open: boolean; onC
   const { tz, filters } = useObsFilters();
   const def = `Observability — ${formatDateTime(from, tz)} → ${formatDateTime(to, tz)} ${tzLabel(tz, to)}`;
   const [title, setTitle] = useState(def);
+  const projects = useProjects();
+  const [projectId, setProjectId] = useState('');
   useEffect(() => { if (open) setTitle(def); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const effProject = projectId || filters.projectId?.[0] || projects.data?.[0]?.id || '';
   const create = useMutation({
     mutationFn: () => {
       const t = title.trim() || def;
-      const projectId = filters.projectId?.length === 1 ? filters.projectId[0] : undefined;
       return api.post<{ id: string }>('/reports', {
-        type: 'OBSERVABILITY', title: t, ...(projectId ? { projectId } : {}),
+        type: 'OBSERVABILITY', title: t, projectId: effProject,
         params: { from: toIso(from), to: toIso(to), filters: apiFilterParams(filters), metrics, title: t },
       });
     },
@@ -204,9 +207,14 @@ function ReportDialog({ open, onClose, from, to, metrics }: { open: boolean; onC
   });
   return (
     <Modal open={open} onClose={onClose} title="Generate observability report" width={520}
-      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={create.isPending} onClick={() => create.mutate()}><FileText size={14} />{create.isPending ? 'Generating…' : 'Generate'}</button></>}>
+      footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary" disabled={create.isPending || !effProject} onClick={() => create.mutate()}><FileText size={14} />{create.isPending ? 'Generating…' : 'Generate'}</button></>}>
       <div className="stack">
         <Field label="Title"><input className="input" value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
+        <Field label="Project" hint="Reports are stored under a project; filters still decide which data is included.">
+          <select className="select" value={effProject} onChange={(e) => setProjectId(e.target.value)}>
+            {(projects.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </Field>
         <div className="small">
           <div><span className="muted">Window</span> <span className="mono">{formatDateTime(from, tz, true)} → {formatDateTime(to, tz, true)}</span> {tzLabel(tz, to)}</div>
           <div><span className="muted">Metrics</span> {metrics.length} ({metrics.slice(0, 6).join(', ')}{metrics.length > 6 ? '…' : ''})</div>

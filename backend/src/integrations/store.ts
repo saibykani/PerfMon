@@ -144,10 +144,24 @@ export async function storeImportedSeries(run: StoreTarget, source: string, seri
     const keyCols = TABLE[target].key === 'server' ? ['server_id'] : TABLE[target].key === 'service' ? ['service_id'] : ['server_id', 'service_id'];
     const columns = ['ts', ...keyCols, 'run_id', ...cols, 'source'];
     const values = list.map((r) => [new Date(r.ts), ...keyCols.map((k) => (k === 'server_id' ? r.server : r.service)), run.id, ...cols.map((c) => r.values[c] ?? null), source]);
+    if (opts.append) {
+      // idempotent window: a re-run of the same window (e.g. after a crash before the watermark was saved) replaces, never duplicates
+      const srvIds = [...new Set(list.map((r) => r.server).filter(Boolean))];
+      const svcIds = [...new Set(list.map((r) => r.service).filter(Boolean))];
+      const params: unknown[] = [source, run.from, run.to];
+      const conds: string[] = [];
+      if (keyCols.includes('server_id') && srvIds.length) { params.push(srvIds); conds.push(`server_id = ANY($${params.length}::uuid[])`); }
+      if (keyCols.includes('service_id') && svcIds.length) { params.push(svcIds); conds.push(`service_id = ANY($${params.length}::uuid[])`); }
+      if (conds.length) await query(`DELETE FROM ${table} WHERE source = $1 AND ts >= $2 AND ts < $3 AND (${conds.join(' OR ')})`, params, tsPool);
+    }
     for (let i = 0; i < values.length; i += 1000) {
       const [sql, params] = bulkInsert(table, columns, values.slice(i, i + 1000));
       await query(sql, params, tsPool);
     }
+  }
+  if (opts.append && generic.length) {
+    await query(`DELETE FROM metric_points WHERE source = $1 AND ts >= $2 AND ts < $3 AND project_id = $4 AND metric = ANY($5::text[])`,
+      [source, run.from, run.to, run.projectId, [...new Set(generic.map((g) => g[1] as string))]], tsPool);
   }
   for (let i = 0; i < generic.length; i += 2000) {
     const [sql, params] = bulkInsert('metric_points', ['ts', 'metric', 'value', 'run_id', 'project_id', 'environment_id', 'tags', 'source'], generic.slice(i, i + 2000));
