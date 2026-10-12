@@ -11,7 +11,7 @@ JVM Monitoring records Java runtime metrics during a test: heap and non-heap mem
 
 ## Sending JVM metrics
 
-The Perfmon Collector only sends host metrics. JVM metrics come from your own exporter (for example a small sidecar that reads JMX or Micrometer values) or from an integration ([Prometheus](32-prometheus-integration.md), [Dynatrace](33-dynatrace-integration.md), [OpenTelemetry](34-opentelemetry.md)). Send them to the same ingestion endpoint as server metrics, in the `jvm` array:
+The Perfmon Collector only sends host metrics. JVM metrics come from your own exporter (for example a small sidecar that reads JMX or Micrometer values) or from a pull integration ([Prometheus](32-prometheus-integration.md), [Dynatrace](33-dynatrace-integration.md), [InfluxDB](00c-influxdb-setup.md)) that maps them to JVM metrics. [OpenTelemetry](34-opentelemetry.md) does **not** feed this view: OTLP metrics are stored as generic metric points (run page → **Raw Metrics**) only. To send JVM metrics yourself, post them to the same ingestion endpoint as server metrics, in the `jvm` array:
 
 | Field | Unit | Description |
 |---|---|---|

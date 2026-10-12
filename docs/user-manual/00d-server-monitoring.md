@@ -2,13 +2,15 @@
 
 Response times only tell half the story. To see *why* a test slowed down, send the CPU and memory of the servers under test to Perfmon while the test runs. Perfmon correlates them with the run, so the run's infrastructure views, the bottleneck analysis and the insights can say things like "P95 rose when app-01 CPU passed 90%".
 
-There are three ways to get server metrics into a run:
+There are two ways to get server metrics into a run's infrastructure views (a third, OpenTelemetry, stores generic metrics only — see the note below the table):
 
 | Method | Best for | Chapter |
 |---|---|---|
 | **Perfmon Collector** — a small Node.js agent on each server | Servers you can install software on | this chapter |
 | **InfluxDB / Prometheus / Dynatrace integration** — Perfmon pulls the metrics for the run window | Servers already monitored by Telegraf, Prometheus or Dynatrace | [InfluxDB](00c-influxdb-setup.md#5-server-metrics-from-influxdb-telegraf), Integrations |
 | **OpenTelemetry** — OTLP/HTTP metrics to `/api/v1/ingest/otlp/v1/metrics` | Services instrumented with OpenTelemetry | Integrations |
+
+> **OpenTelemetry is not a server-metrics source.** OTLP/HTTP metrics sent to `/api/v1/ingest/otlp/v1/metrics` are stored as generic metric points (run page → **Raw Metrics**, table `metric_points`). They do **not** populate the server/infrastructure views, the CPU/memory SLA metrics, bottleneck analysis or insights. Use the Collector or an InfluxDB / Prometheus / Dynatrace integration for that. See [OpenTelemetry](34-opentelemetry.md).
 
 ## The Perfmon Collector
 
