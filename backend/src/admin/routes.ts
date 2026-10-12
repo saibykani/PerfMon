@@ -33,6 +33,10 @@ const SETTING_SCHEMAS: Record<SettingKey, z.ZodTypeAny> = {
     rawMetricsDays: z.number().int().min(1).max(36500), aggregatedMetricsDays: z.number().int().min(1).max(36500), artifactsDays: z.number().int().min(1).max(36500),
     reportsDays: z.number().int().min(1).max(36500), logsDays: z.number().int().min(1).max(36500), auditDays: z.number().int().min(30).max(36500),
   }).partial(),
+  loadgen_thresholds: z.object({
+    cpuWarnPct: z.number().min(0).max(100), cpuCritPct: z.number().min(0).max(100), memWarnPct: z.number().min(0).max(100), memCritPct: z.number().min(0).max(100),
+    heapWarnPct: z.number().min(0).max(100), heapCritPct: z.number().min(0).max(100), minSharePct: z.number().min(0).max(100),
+  }).partial(),
   live: z.object({ defaultRefreshSec: z.number().int().min(1).max(3600) }).partial(),
 };
 
@@ -379,6 +383,10 @@ export async function adminRoutes(app: FastifyInstance) {
     const before = await getSetting(p.orgId, key);
     const merged = { ...(before as object), ...(parsed.data as object) };
     if (key === 'default_result_thresholds' && (merged as any).errorPctWarn > (merged as any).errorPctFail) throw badRequest('errorPctWarn must be ≤ errorPctFail');
+    if (key === 'loadgen_thresholds') {
+      const m = merged as any;
+      for (const k of ['cpu', 'mem', 'heap']) if (m[`${k}WarnPct`] > m[`${k}CritPct`]) throw badRequest(`${k}WarnPct must be ≤ ${k}CritPct`);
+    }
     await setSetting(p.orgId, key, merged, p.kind === 'user' ? p.id : null);
     await audit(req, { action: 'settings.update', resourceType: 'setting', resourceId: key, details: { before, after: merged } });
     return { key, value: await getSetting(p.orgId, key) };

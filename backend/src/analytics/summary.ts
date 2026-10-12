@@ -65,7 +65,7 @@ export async function infraAggregates(runId: string) {
   const [jvm] = await query(
     `SELECT max(heap_used_mb / NULLIF(heap_max_mb,0) * 100) heap_pct_max, avg(heap_used_mb / NULLIF(heap_max_mb,0) * 100) heap_pct_avg,
             max(gc_max_pause_ms) gc_pause_max, avg(gc_time_ms) gc_time_avg, max(thread_count) threads_max, count(*) n
-     FROM jvm_metrics WHERE run_id = $1`, [runId], tsPool);
+     FROM jvm_metrics j WHERE run_id = $1 AND NOT EXISTS (SELECT 1 FROM servers s WHERE s.id = j.server_id AND s.role = 'loadgen')`, [runId], tsPool);
   const [db] = await query(
     `SELECT avg(query_latency_ms) latency_avg, max(query_latency_ms) latency_max, max(active_connections) active_max,
             max(active_connections::float / NULLIF(max_connections,0) * 100) pool_pct_max, sum(slow_queries) slow_queries, max(locks) locks_max, avg(cpu_pct) cpu_avg, count(*) n

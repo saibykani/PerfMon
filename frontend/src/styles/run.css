@@ -90,3 +90,12 @@
 .live-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .live-kpis .kpi-value { font-size: 24px; }
 .live { color: var(--fail); }
+
+/* Load generator health */
+.lg-banner { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--border); border-left: 3px solid var(--warn); border-radius: var(--radius); background: var(--surface-2); color: var(--text); font-size: 13px; }
+.lg-banner > svg { flex: none; margin-top: 2px; color: var(--warn); }
+.lg-banner > div { flex: 1; min-width: 0; }
+.lg-banner.lg-fail { border-left-color: var(--fail); }
+.lg-banner.lg-fail > svg { color: var(--fail); }
+.ink-warn { color: var(--warn); }
+.ink-fail { color: var(--fail); }

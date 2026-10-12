@@ -71,7 +71,7 @@ async function owned(req: FastifyRequest, id: string) {
 
 const credentialKeys = async (id: string) => (await query(`SELECT name FROM integration_credentials WHERE integration_id = $1 ORDER BY name`, [id])).map((r) => r.name as string);
 
-async function loadCredentials(id: string): Promise<Credentials> {
+export async function loadCredentials(id: string): Promise<Credentials> {
   const rows = await query(`SELECT name, ciphertext FROM integration_credentials WHERE integration_id = $1`, [id]);
   const out: Credentials = {};
   for (const r of rows) {
@@ -92,7 +92,7 @@ async function saveCredentials(id: string, creds: Record<string, string | null> 
   }
 }
 
-const toRecord = (r: any): IntegrationRecord => ({ id: r.id, organizationId: r.organization_id, projectId: r.project_id, name: r.name, type: r.type, url: r.url, authType: r.auth_type, config: r.config ?? {} });
+export const toRecord = (r: any): IntegrationRecord => ({ id: r.id, organizationId: r.organization_id, projectId: r.project_id, name: r.name, type: r.type, url: r.url, authType: r.auth_type, config: r.config ?? {} });
 
 /** Run window for imports: started_at → ended_at (or now while running), step ≤ 600 points. */
 async function runWindow(ref: RunRef): Promise<RunWindow> {

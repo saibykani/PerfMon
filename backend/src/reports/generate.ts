@@ -1,14 +1,16 @@
 import { one, query } from '../db/pool.js';
 import { registerJob, enqueue } from '../jobs/queue.js';
 import { buildTestExecutionContent, buildComparisonContent, buildExecutiveContent, buildSlaContent, buildTrendContent } from './content.js';
+import { buildObservabilityContent } from './observability.js';
 
-export const GENERATABLE_TYPES = ['TEST_EXECUTION', 'COMPARISON', 'EXECUTIVE', 'SLA', 'TREND'] as const;
+export const GENERATABLE_TYPES = ['TEST_EXECUTION', 'COMPARISON', 'EXECUTIVE', 'SLA', 'TREND', 'OBSERVABILITY'] as const;
 export type ReportType = (typeof GENERATABLE_TYPES)[number];
 
 export interface ReportParams {
   runIds?: string[];            // COMPARISON (ordered; first = reference)
   from?: string; to?: string;   // EXECUTIVE / SLA / TREND window (ISO)
   testId?: string | null; environmentId?: string | null;
+  filters?: Record<string, string[]>; metrics?: string[];   // OBSERVABILITY
   subjectKey?: string;          // versioning key (see 004 migration index)
   auto?: boolean;
 }
@@ -17,6 +19,7 @@ const subjectKey = (type: ReportType, projectId: string, runId: string | null, p
   type === 'TEST_EXECUTION' ? `run:${runId}`
     : type === 'COMPARISON' ? `runs:${(p.runIds ?? []).join(',')}`
     : type === 'TREND' ? `trend:${p.testId ?? '*'}|${p.environmentId ?? '*'}`
+    : type === 'OBSERVABILITY' ? `obs:${projectId}|${JSON.stringify(p.filters ?? {})}`
     : type === 'SLA' ? `sla:${projectId}|${p.testId ?? '*'}|${p.environmentId ?? '*'}`
     : `project:${projectId}|${p.testId ?? '*'}|${p.environmentId ?? '*'}`;
 
@@ -51,6 +54,9 @@ async function generate(reportId: string, attempts: number, maxAttempts: number)
     } else if (rep.type === 'COMPARISON') {
       if (!p.runIds || p.runIds.length < 2) throw new Error('Comparison report needs at least two runs');
       content = await buildComparisonContent(p.runIds, rep.version, rep.title);
+    } else if (rep.type === 'OBSERVABILITY') {
+      if (!p.from || !p.to) throw new Error('Observability report needs from / to');
+      content = await buildObservabilityContent({ orgId: rep.organization_id, projectId: rep.project_id, params: { from: p.from, to: p.to, filters: p.filters, metrics: p.metrics } }, rep.version, rep.title);
     } else if (rep.type === 'EXECUTIVE' || rep.type === 'SLA' || rep.type === 'TREND') {
       const to = p.to ? new Date(p.to) : new Date(rep.created_at);
       const from = p.from ? new Date(p.from) : new Date(to.getTime() - (rep.type === 'TREND' ? 90 : 30) * 86400000);

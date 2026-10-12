@@ -10,6 +10,8 @@ export const DEFAULT_SETTINGS = {
   },
   /** Default thresholds used when a test has no SLA profile (for result classification only). */
   default_result_thresholds: { errorPctFail: 5, errorPctWarn: 1 },
+  /** Load generator health (host CPU / memory and JMeter JVM heap, in %). A level is reached when at least minSharePct % of samples are at/above it. */
+  loadgen_thresholds: { cpuWarnPct: 75, cpuCritPct: 90, memWarnPct: 80, memCritPct: 90, heapWarnPct: 85, heapCritPct: 95, minSharePct: 10 },
   retention: { rawMetricsDays: 90, aggregatedMetricsDays: 730, artifactsDays: 365, reportsDays: 730, logsDays: 30, auditDays: 365 },
   live: { defaultRefreshSec: 5 },
 };

@@ -21,6 +21,8 @@ export interface ChartProps {
   empty?: string | null;
   className?: string;
   actions?: React.ReactNode;
+  /** called once with the ECharts instance after init (extra event wiring, e.g. brush) */
+  onReady?: (chart: ECharts) => void;
 }
 
 /** Base option applied to every chart: theme-aware chrome, recessive grid/axes, crosshair tooltip. */
@@ -51,7 +53,7 @@ function merge(base: any, extra: any): any {
   return out;
 }
 
-export function Chart({ option, height = 240, title, subtitle, group, onRangeSelect, onPointClick, table, loading, empty, className, actions }: ChartProps) {
+export function Chart({ option, height = 240, title, subtitle, group, onRangeSelect, onPointClick, table, loading, empty, className, actions, onReady }: ChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   const inst = useRef<ECharts | null>(null);
   const theme = useUi((s) => s.theme);
@@ -61,6 +63,8 @@ export function Chart({ option, height = 240, title, subtitle, group, onRangeSel
   const cbClick = useRef(onPointClick);
   cbRange.current = onRangeSelect;
   cbClick.current = onPointClick;
+  const cbReady = useRef(onReady);
+  cbReady.current = onReady;
 
   const merged = useMemo(() => {
     const b = baseOption(theme);
@@ -89,6 +93,7 @@ export function Chart({ option, height = 240, title, subtitle, group, onRangeSel
       if (dz?.startValue != null && dz?.endValue != null) cbRange.current(Number(dz.startValue), Number(dz.endValue));
     });
     chart.on('click', (p) => cbClick.current?.(p));
+    cbReady.current?.(chart);
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(ref.current);
     return () => { ro.disconnect(); chart.dispose(); inst.current = null; };

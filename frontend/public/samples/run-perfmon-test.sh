@@ -11,6 +11,9 @@
 #   PERFMON_TEST         performance test name, e.g. "200 TPS Payment Load"         (required)
 #   PERFMON_BUILD        build number (optional)        JMETER_ARGS  extra JMeter options (optional)
 #   JMETER               jmeter executable (default: jmeter on PATH)
+#   PERFMON_LOADGEN_MONITOR  true (default) | false — run the Perfmon Collector on this load generator during the test
+#   PERFMON_COLLECTOR    path of perfmon-collector.mjs (default: next to this script); needs Node.js 18+
+#   PERFMON_SERVER       load generator name shown in Perfmon (default: hostname)
 # Requires: curl, zip (for the HTML report) and python3 or jq (to read JSON).
 set -euo pipefail
 
@@ -39,6 +42,30 @@ echo "✔ Run ID: ${RUN_ID}"
 
 OUT="perfmon-${RUN_ID}"
 rm -rf "$OUT" && mkdir -p "$OUT"
+
+# Load generator monitoring: host CPU/memory/disk/network + JMeter process and JVM heap, tagged with the Run ID
+COLLECTOR="${PERFMON_COLLECTOR:-$(cd "$(dirname "$0")" && pwd)/perfmon-collector.mjs}"
+COLL_PID=""; COLL_STOP="$OUT/.collector-stop"
+if [ "${PERFMON_LOADGEN_MONITOR:-true}" = "false" ]; then
+  echo "▶ Load generator monitoring disabled (PERFMON_LOADGEN_MONITOR=false)"
+elif ! command -v node >/dev/null 2>&1; then
+  echo "  (load generator monitoring skipped: Node.js 18+ not found on PATH)"
+elif [ ! -f "$COLLECTOR" ]; then
+  echo "  (load generator monitoring skipped: $COLLECTOR not found — download perfmon-collector.mjs next to this script)"
+else
+  PERFMON_URL="$PERFMON_URL" PERFMON_API_KEY="$PERFMON_API_KEY" PERFMON_RUN_ID="$RUN_ID" PERFMON_ROLE=loadgen PERFMON_JMETER=true     PERFMON_STOP_FILE="$COLL_STOP" INTERVAL_SEC="${INTERVAL_SEC:-5}" node "$COLLECTOR" >"$OUT/collector.log" 2>&1 &
+  COLL_PID=$!
+  echo "▶ Load generator monitoring started (collector pid $COLL_PID, log $OUT/collector.log)"
+fi
+stop_collector() {
+  [ -n "$COLL_PID" ] || return 0
+  touch "$COLL_STOP"
+  for _ in $(seq 1 40); do kill -0 "$COLL_PID" 2>/dev/null || break; sleep 0.5; done
+  kill "$COLL_PID" 2>/dev/null || true
+  COLL_PID=""
+  echo "  ✔ load generator monitoring stopped"
+}
+trap stop_collector EXIT
 echo "▶ Running JMeter (live view: ${PERFMON_URL%:*}:3000/live/${RUN_ID}) ..."
 set +e
 # shellcheck disable=SC2086
@@ -46,6 +73,7 @@ set +e
   -Jperfmon.url="${PERFMON_URL%/}" -Jperfmon.runId="$RUN_ID" -Jperfmon.token="$PERFMON_API_KEY" ${JMETER_ARGS:-}
 JM=$?
 set -e
+stop_collector
 
 upload() {  # upload <kind> <file>
   [ -f "$2" ] || { echo "  (skipped $1: $2 not found)"; return 0; }

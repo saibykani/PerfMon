@@ -10,6 +10,7 @@ import { detectRegressions } from './regression.js';
 import { generateInsights } from './insights.js';
 import { performanceScore, classifyResult } from './score.js';
 import { getSetting } from './settings.js';
+import { loadgenHealth } from './loadgen.js';
 import { reconcile } from '../reports/reconcile.js';
 import { evaluateRunCompletionAlerts } from '../alerts/evaluator.js';
 
@@ -37,11 +38,13 @@ export async function analyzeRun(runId: string) {
   const transactions = await primaryTransactions(runId);
   const errorsByType = await query(`SELECT error_type, sum(count)::int n FROM error_metrics WHERE run_id = $1 GROUP BY 1 ORDER BY 2 DESC`, [runId]);
   const rec = await reconcile(runId);
+  const lg = await loadgenHealth(runId, run.organization_id);
+  const lgSummary = { status: lg.status, hosts: lg.hosts.map((h) => ({ name: h.name, status: h.status, metrics: h.metrics })) };
 
   await generateInsights(runId, {
     summary, baselineSummary, baselineKey: baseline?.runKey ?? null, infra, baselineInfra,
     bottlenecks: bott.candidates, gaps: bott.gaps, regressions: reg.findings, sla: { results: sla.results, passPct: sla.passPct },
-    transactions, errorsByType, reconciliation: rec.status === 'NOT_AVAILABLE' ? null : rec,
+    transactions, errorsByType, reconciliation: rec.status === 'NOT_AVAILABLE' ? null : rec, loadgen: lgSummary,
   });
 
   const weights = await getSetting(run.organization_id, 'score_weights');
@@ -51,12 +54,13 @@ export async function analyzeRun(runId: string) {
     targetTps: run.target_tps, baselineTps: baselineSummary?.tps_avg ?? null, infra, regressions: reg.findings, hasBaseline: !!baseline,
   });
   const defaults = await getSetting(run.organization_id, 'default_result_thresholds');
-  const result = classifyResult({ runStatus: run.status === 'ANALYZING' ? 'COMPLETED' : run.status, summary, sla, regressions: reg.findings, infra, defaults, targetTps: run.target_tps });
+  const result = classifyResult({ runStatus: run.status === 'ANALYZING' ? 'COMPLETED' : run.status, summary, sla, regressions: reg.findings, infra, defaults, targetTps: run.target_tps,
+    loadgen: { status: lg.status, hosts: lg.hosts.filter((h) => h.status === 'SATURATED').map((h) => h.name) } });
 
   await query(
     `UPDATE test_runs SET performance_score = $2, score_breakdown = $3, result = $4, result_breakdown = $5, analysis = $6, analyzed_at = now(),
        baseline_run_id = COALESCE(baseline_run_id, $7), updated_at = now() WHERE id = $1`,
-    [runId, score.score, JSON.stringify(score), result.result, JSON.stringify(result), JSON.stringify({ bottlenecks: bott.candidates, saturation: bott.saturation, gaps: bott.gaps, baseline, reconciliation: rec.status }), baseline?.id ?? null]);
+    [runId, score.score, JSON.stringify(score), result.result, JSON.stringify(result), JSON.stringify({ bottlenecks: bott.candidates, saturation: bott.saturation, gaps: bott.gaps, baseline, reconciliation: rec.status, loadgen: { status: lg.status, thresholds: lg.thresholds, hosts: lg.hosts.map((h) => ({ name: h.name, status: h.status })) } }), baseline?.id ?? null]);
   return { summary, sla, baseline, bottlenecks: bott, regressions: reg.findings, score, result };
 }
 

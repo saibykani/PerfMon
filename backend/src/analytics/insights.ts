@@ -3,6 +3,7 @@ import { round, pctChange } from '../lib/stats.js';
 import type { BottleneckCandidate } from './bottleneck.js';
 import type { RegressionFinding } from './regression.js';
 import type { InfraAggregates } from './summary.js';
+import { loadgenInsight, type LoadgenSummary } from './loadgenHealth.js';
 
 type Severity = 'INFO' | 'WARNING' | 'CRITICAL';
 interface Insight {
@@ -38,6 +39,7 @@ export async function generateInsights(runId: string, ctx: {
   summary: any; baselineSummary: any | null; baselineKey: string | null; infra: InfraAggregates; baselineInfra: InfraAggregates | null;
   bottlenecks: BottleneckCandidate[]; gaps: string[]; regressions: RegressionFinding[]; sla: { results: any[]; passPct: number | null };
   transactions: any[]; errorsByType: { error_type: string; n: number }[]; reconciliation?: { consistent: boolean; issues: string[] } | null;
+  loadgen?: LoadgenSummary | null;
 }) {
   const out: Insight[] = [];
   const { summary: s, baselineSummary: b, infra } = ctx;
@@ -66,8 +68,13 @@ export async function generateInsights(runId: string, ctx: {
     }
   }
 
+  // Load generator health (configurable thresholds) — replaces the generic LOAD_GENERATOR bottleneck when collector data exists
+  const lgInsight = ctx.loadgen ? loadgenInsight(ctx.loadgen) : null;
+  if (lgInsight) out.push(lgInsight);
+  const hasLgEval = !!ctx.loadgen && ctx.loadgen.status !== 'NO_DATA';
+
   // Bottlenecks
-  for (const c of ctx.bottlenecks.filter((x) => x.confidence >= 0.45).slice(0, 3)) {
+  for (const c of ctx.bottlenecks.filter((x) => x.confidence >= 0.45 && !(hasLgEval && x.category === 'LOAD_GENERATOR')).slice(0, 3)) {
     const rec = RECOMMENDATIONS[c.category];
     out.push({
       category: 'BOTTLENECK', severity: c.confidence >= 0.65 ? 'WARNING' : 'INFO', component: c.component,

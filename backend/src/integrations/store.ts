@@ -45,11 +45,22 @@ function applyTransform(v: number, s: ImportedSeries['query']) {
   return x;
 }
 
-export async function storeImportedSeries(run: RunWindow, source: string, series: ImportedSeries[]) {
+/** Store target: a run window, or (continuous collection) a window without a run (`id` null). */
+export type StoreTarget = Omit<RunWindow, 'id' | 'environmentId' | 'applicationId'> & { id: string | null; environmentId: string | null; applicationId: string | null };
+
+/**
+ * `append` (continuous collection): nothing is deleted; only points with from ≤ t < to are stored, so consecutive
+ * non-overlapping windows never duplicate a timestamp. Without `append` (run import) the previous import of the same
+ * source for the run is replaced and points within ±60 s of the run window are kept.
+ */
+export async function storeImportedSeries(run: StoreTarget, source: string, series: ImportedSeries[], opts: { append?: boolean } = {}) {
   const warnings: string[] = [];
-  // idempotent: remove a previous import from the same source for this run
-  for (const t of ['server_metrics', 'jvm_metrics', 'database_metrics', 'service_metrics']) await query(`DELETE FROM ${t} WHERE run_id = $1 AND source = $2`, [run.id, source], tsPool);
-  await query(`DELETE FROM metric_points WHERE run_id = $1 AND source = $2`, [run.id, source], tsPool);
+  if (!opts.append) {
+    if (!run.id) throw new Error('storeImportedSeries: a run is required unless append = true');
+    // idempotent: remove a previous import from the same source for this run
+    for (const t of ['server_metrics', 'jvm_metrics', 'database_metrics', 'service_metrics']) await query(`DELETE FROM ${t} WHERE run_id = $1 AND source = $2`, [run.id, source], tsPool);
+    await query(`DELETE FROM metric_points WHERE run_id = $1 AND source = $2`, [run.id, source], tsPool);
+  }
 
   const serverIds = new Map<string, string>();
   const serviceIds = new Map<string, string>();
@@ -66,6 +77,9 @@ export async function storeImportedSeries(run: RunWindow, source: string, series
   const serviceId = async (name: string, kind: string, srv: string | null) => {
     const k = `${kind}|${name}`;
     if (serviceIds.has(k)) return serviceIds.get(k)!;
+    // environment may be NULL (continuous collection without environment): ON CONFLICT never matches NULLs, so look up first
+    const existing = run.environmentId ? null : await one(`SELECT id FROM services WHERE project_id = $1 AND environment_id IS NULL AND name = $2 LIMIT 1`, [run.projectId, name]);
+    if (existing) { serviceIds.set(k, existing.id); return existing.id as string; }
     const row = await one(
       `INSERT INTO services (project_id, application_id, environment_id, server_id, name, kind) VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (project_id, environment_id, name) DO UPDATE SET server_id = COALESCE(services.server_id, EXCLUDED.server_id) RETURNING id`,
@@ -84,7 +98,7 @@ export async function storeImportedSeries(run: RunWindow, source: string, series
   for (const s of series) {
     const q = s.query;
     const col = TARGET_COLUMNS[q.target]?.[q.metric];
-    const pts = s.points.filter(([t, v]) => t >= fromMs - 60000 && t <= toMs + 60000 && Number.isFinite(v));
+    const pts = s.points.filter(([t, v]) => (opts.append ? t >= fromMs && t < toMs : t >= fromMs - 60000 && t <= toMs + 60000) && Number.isFinite(v));
     if (!pts.length) continue;
     if (!col) {
       if (q.target !== 'custom') warnings.push(`${q.metric}: not a known ${q.target} metric — stored as a custom metric point`);

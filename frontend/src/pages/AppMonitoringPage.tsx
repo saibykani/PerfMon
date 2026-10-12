@@ -16,6 +16,7 @@ import { RunSelectorBar, useRunSelection } from '@/components/run/RunPicker';
 import { MetricGrid } from '@/components/run/tabs/InfraTabs';
 import { useRecentRuns } from '@/components/databases/dbData';
 import { IngestGuide } from '@/components/databases/IngestGuide';
+import { ObsWindowView, ViewModeToggle, useViewMode } from '@/components/observability/ObsWindow';
 import { hasServiceMetrics, jvmQuery, jvmStats, servicesQuery, useAcrossRuns, withHeapPct, type RunService } from '@/components/appmon/appmonData';
 import '@/styles/run.css';
 import '@/styles/appmon.css';
@@ -24,6 +25,7 @@ const lvl = (v: number | null | undefined, warn: number, crit: number) => (v == 
 
 export function AppMonitoringPage() {
   const sel = useRunSelection();
+  const [mode, setMode] = useViewMode();
   const f = useFilters();
   const theme = useUi((s) => s.theme);
   const jvm = useQuery({ ...jvmQuery(sel.runId ?? ''), enabled: !!sel.runId });
@@ -101,6 +103,12 @@ export function AppMonitoringPage() {
     <div className="apm-page">
       <PageHeader title="Applications Monitoring" subtitle="Runtime health of application services per test run — JVM heap, GC and threads, service error rates, latency and CPU — plus the application inventory."
         actions={<Link className="btn" to="/help/jvm-monitoring"><BookOpen size={14} />JVM monitoring guide</Link>} />
+      <ViewModeToggle mode={mode} onChange={setMode} />
+      {mode === 'time' ? (
+        <div className="stack">
+          <ObsWindowView preset="services" group="apm-window" dims={['projectId', 'environmentId', 'applicationId', 'runId', 'role', 'hostId', 'serviceId']} />
+        </div>
+      ) : <>
       <RunSelectorBar sel={sel} />
 
       <div className="stack">
@@ -219,6 +227,7 @@ export function AppMonitoringPage() {
 
         {!noRun && targets.length > 0 && <IngestGuide kind="jvm" title="Send more JVM & service metrics" />}
       </div>
+      </>}
     </div>
   );
 }

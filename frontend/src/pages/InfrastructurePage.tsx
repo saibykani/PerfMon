@@ -14,6 +14,9 @@ import { CodeBlock, EmptyState, HealthChip, Notice, Toaster, UsageBar, friendlyE
 import { useEnvironments, useInvalidateInventory, useProjects, useRuns, useServers, type Server } from '@/components/inventory/data';
 import { ServerForm } from '@/components/inventory/forms';
 import { perfmonOrigin } from '@/components/inventory/NewRun';
+import { ObsWindowView, ViewModeToggle, useViewMode } from '@/components/observability/ObsWindow';
+import { ROLE_LABEL } from '@/components/observability/ObsFilterBar';
+import { useObsFilters } from '@/stores/obsFilters';
 
 const RANGES = [{ key: '24h', label: 'Last 24 hours', ms: 864e5 }, { key: '7d', label: 'Last 7 days', ms: 7 * 864e5 }, { key: '30d', label: 'Last 30 days', ms: 30 * 864e5 }, { key: '90d', label: 'Last 90 days', ms: 90 * 864e5 }];
 interface InfraResp { servers: { id: string; name: string; cpu_avg: number | null; cpu_max: number | null; mem_avg: number | null; mem_max: number | null; disk_max: number | null; net_in_avg: number | null; net_out_avg: number | null; load_max: number | null }[]; step: number; series: ({ t: number; server_id: string } & Record<string, number | null>)[] }
@@ -29,6 +32,8 @@ export function InfrastructurePage() {
   const [form, setForm] = useState<{ open: boolean; server?: Server | null }>({ open: false });
   const [del, setDel] = useState<Server | null>(null);
   const [selId, setSelId] = useState<string | null>(null);
+  const [mode, setMode] = useViewMode();
+  const setObsFilter = useObsFilters((st) => st.setFilter);
   const rows = data ?? [];
   const sel = rows.find((s) => s.id === selId) ?? null;
   useEffect(() => { if (!selId && rows.length) setSelId((rows.find((s) => s.metrics_at) ?? rows[0]).id); }, [rows, selId]);
@@ -47,7 +52,7 @@ export function InfrastructurePage() {
     { key: 'disk_gb', header: 'Disk', align: 'right', render: (s) => (s.disk_gb ? `${fmtNum(s.disk_gb)} GB` : '—') },
     { key: 'environment_name', header: 'Environment' },
     { key: 'application_name', header: 'Application', render: (s) => s.application_name ?? <span className="muted">shared</span> },
-    { key: 'role', header: 'Role', render: (s) => (s.role ? <span className="badge">{s.role}</span> : '—') },
+    { key: 'role', header: 'Role', render: (s) => (s.role ? <span className={`badge ${s.role === 'loadgen' ? 'accent' : ''}`} title={s.role}>{ROLE_LABEL[s.role] ?? s.role}</span> : '—') },
     { key: 'status', header: 'Status', render: (s) => <HealthChip status={s.status} /> },
     { key: 'cpu_pct', header: 'CPU', value: (s) => num(s.cpu_pct), render: (s) => <UsageBar value={num(s.cpu_pct)} /> },
     { key: 'memory_pct', header: 'Memory %', value: (s) => num(s.memory_pct), render: (s) => <UsageBar value={num(s.memory_pct)} warn={80} crit={92} /> },
@@ -74,7 +79,7 @@ export function InfrastructurePage() {
       </div>
       <ErrorBox error={error} />
       <div className="card" style={{ marginBottom: 12 }}>
-        <DataTable rows={rows} columns={cols} rowKey={(s) => s.id} loading={isLoading} onRowClick={(s) => setSelId(s.id)} exportName="servers" maxHeight={420}
+        <DataTable rows={rows} columns={cols} rowKey={(s) => s.id} loading={isLoading} onRowClick={(s) => { setSelId(s.id); if (mode === 'time') setObsFilter('hostId', [s.id]); }} exportName="servers" maxHeight={420}
           toolbar={<>
             <select className="select" aria-label="Project" value={projectId} onChange={(e) => { setProjectId(e.target.value); setEnvironmentId(''); setSelId(null); }}><option value="">All projects</option>{projects.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
             <select className="select" aria-label="Environment" value={environmentId} onChange={(e) => { setEnvironmentId(e.target.value); setSelId(null); }}><option value="">All environments</option>{envs.data?.map((en) => <option key={en.id} value={en.id}>{en.name} · {en.application_name}</option>)}</select>
@@ -83,10 +88,18 @@ export function InfrastructurePage() {
             Servers appear automatically when the Perfmon Collector reports, or register them manually.</EmptyState>} />
       </div>
 
-      <div className="inv-split">
-        <ServerMetrics server={sel} servers={rows} onSelect={setSelId} />
-        <CollectorCard server={sel} projectKey={projects.data?.find((p) => p.id === (sel?.project_id ?? projectId))?.key} />
-      </div>
+      <ViewModeToggle mode={mode} onChange={setMode} hint={mode === 'time' ? 'Host metrics for any window — click a server above to filter to it; use Role → Load generator for JMeter machines.' : undefined} />
+      {mode === 'time' ? (
+        <div className="stack" style={{ marginBottom: 12 }}>
+          <ObsWindowView preset="hosts" group="infra-window" dims={['projectId', 'environmentId', 'role', 'hostId', 'runId']} />
+          <CollectorCard server={sel} projectKey={projects.data?.find((p) => p.id === (sel?.project_id ?? projectId))?.key} />
+        </div>
+      ) : (
+        <div className="inv-split">
+          <ServerMetrics server={sel} servers={rows} onSelect={setSelId} />
+          <CollectorCard server={sel} projectKey={projects.data?.find((p) => p.id === (sel?.project_id ?? projectId))?.key} />
+        </div>
+      )}
 
       <ServerForm open={form.open} server={form.server} projectId={projectId || null} onClose={() => setForm({ open: false })} onSaved={(s) => setSelId(s.id)} />
       <ConfirmDialog open={!!del} onClose={() => setDel(null)} title={`Remove server “${del?.name ?? ''}”?`} requireText={del?.name} confirmLabel="Remove server"

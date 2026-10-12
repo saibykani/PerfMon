@@ -42,6 +42,7 @@ const IntegrationsPage = page(() => import('@/pages/IntegrationsPage'), 'Integra
 const AdminPage = page(() => import('@/pages/admin/AdminPage'), 'AdminPage');
 const HelpPage = page(() => import('@/pages/HelpPage'), 'HelpPage');
 const SystemMonitorPage = page(() => import('@/pages/SystemMonitorPage'), 'SystemMonitorPage');
+const ObservabilityPage = page(() => import('@/pages/ObservabilityPage'), 'ObservabilityPage');
 const KubernetesPage = page(() => import('@/pages/KubernetesPage'), 'KubernetesPage');
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -75,6 +76,7 @@ export function App() {
         <Route path="runs" element={<RunsPage />} />
         <Route path="runs/:runId" element={<S><RunDetailPage /></S>} />
         <Route path="runs/:runId/:tab" element={<S><RunDetailPage /></S>} />
+        <Route path="observability" element={<S><ObservabilityPage /></S>} />
         <Route path="dashboards" element={<S><DashboardsPage /></S>} />
         <Route path="dashboards/:uid" element={<S><DashboardViewPage /></S>} />
         <Route path="live" element={<S><LivePage /></S>} />

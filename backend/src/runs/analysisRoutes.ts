@@ -10,6 +10,7 @@ import { compareRuns, resolveBaseline } from '../analytics/compare.js';
 import { reconcile } from '../reports/reconcile.js';
 import { hub, liveConnections } from '../live/hub.js';
 import { pctChange } from '../lib/stats.js';
+import { loadgenHealth } from '../analytics/loadgen.js';
 
 const idParam = z.object({ id: z.string() });
 const rangeQuery = { from: z.string().optional(), to: z.string().optional(), step: z.coerce.number().int().min(1).optional(), source: z.string().optional() };
@@ -201,6 +202,12 @@ export async function runAnalysisRoutes(app: FastifyInstance) {
     const series = await infraSeries('server_metrics', ['cpu_pct', 'memory_pct', 'disk_pct', 'disk_read_bps', 'disk_write_bps', 'net_in_bps', 'net_out_bps', 'load_avg_1m', 'tcp_connections', 'processes', 'file_descriptors'],
       { runId: ref.id, from: d(req.query.from), to: d(req.query.to), step: req.query.step, groupBy: 'server_id' });
     return { servers, step: series.step, series: series.points };
+  });
+
+  r.get('/runs/:id/loadgen', { ...view, schema: { tags: ['Run Analysis'], summary: 'Load generator health: host CPU/memory, JMeter process and heap per load generator, evaluated against the loadgen_thresholds setting', params: idParam } }, async (req) => {
+    const p = principalOf(req);
+    const ref = await resolveRun(req.params.id, p);
+    return loadgenHealth(ref.id, p.orgId);
   });
 
   r.get('/runs/:id/jvm', { ...view, schema: { tags: ['Run Analysis'], summary: 'JVM metrics (heap, GC, threads, classes)', params: idParam, querystring: z.object(rangeQuery) } }, async (req) => {

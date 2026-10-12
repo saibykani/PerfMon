@@ -29,17 +29,30 @@ let lastPrune = 0;
 let timer: NodeJS.Timeout | null = null;
 let log: (m: string) => void = () => undefined;
 
+/**
+ * Continuous mode (Observability → collection schedules): connections sampled regardless of viewers. The
+ * observability scheduler drives these samples (DB-claimed, one instance at a time) and sets this list so
+ * the prune below keeps their history (OBS_K8S_RETENTION_DAYS, default 14 days) instead of 24 h.
+ */
+let continuous = new Set<string>();
+export function setContinuous(ids: string[]) { continuous = new Set(ids); }
+export const isContinuous = (id: string) => continuous.has(id);
+const RETENTION_DAYS = Math.max(1, Number(process.env.OBS_K8S_RETENTION_DAYS ?? 14) || 14);
+
 export function touch(id: string) {
   viewers.set(id, Date.now());
   if (viewers.size > 200) viewers.delete(viewers.keys().next().value!);
 }
+
+/** Seconds since the last sample of a connection on this instance (Infinity if never). */
+export const secondsSinceSample = (id: string) => { const s = state.get(id); return s?.lastSample ? (Date.now() - s.lastSample) / 1000 : Infinity; };
 
 export function samplerStatus(id: string) {
   const s = state.get(id);
   const viewedAt = viewers.get(id) ?? 0;
   const run = runLinks.get(id) ?? null;
   return {
-    active: Date.now() - viewedAt < VIEW_TTL_MS || !!run, intervalSec: SAMPLE_SEC,
+    active: Date.now() - viewedAt < VIEW_TTL_MS || !!run || continuous.has(id), continuous: continuous.has(id), intervalSec: SAMPLE_SEC,
     lastSampleAt: s?.lastSample ? new Date(s.lastSample).toISOString() : null, lastError: s?.lastError ?? null, lastPoints: s?.lastPoints ?? 0,
     linkedRun: run ? run.runKey : null,
   };
@@ -125,14 +138,18 @@ async function tick() {
     for (const [id, at] of viewers) if (now - at > VIEW_TTL_MS) viewers.delete(id);
     if (now - lastRunCheck > RUN_CHECK_MS) await refreshRunLinks().catch((e) => log(`[k8s-sampler] run check failed: ${(e as Error).message}`));
     const active = new Set([...viewers.keys(), ...runLinks.keys()]);
-    for (const id of [...state.keys()]) if (!active.has(id)) state.delete(id);   // idle: drop state
+    for (const id of [...state.keys()]) if (!active.has(id) && !continuous.has(id)) state.delete(id);   // idle: drop state
     for (const id of active) {
       const s = state.get(id);
       if (!s || now - s.lastSample >= SAMPLE_SEC * 1000) void sampleOnce(id);
     }
     if (now - lastPrune > 30 * 60_000) {
       lastPrune = now;
-      await query(`DELETE FROM metric_points WHERE source = 'kubernetes' AND run_id IS NULL AND ts < now() - interval '24 hours'`).catch(() => undefined);
+      const keep = [...continuous];
+      await query(`DELETE FROM metric_points WHERE source = 'kubernetes' AND run_id IS NULL AND ts < now() - interval '24 hours'
+                    AND NOT (tags->>'cluster' = ANY($1::text[]))`, [keep]).catch(() => undefined);
+      if (keep.length) await query(`DELETE FROM metric_points WHERE source = 'kubernetes' AND run_id IS NULL AND ts < now() - make_interval(days => $2::int)
+                    AND tags->>'cluster' = ANY($1::text[])`, [keep, RETENTION_DAYS]).catch(() => undefined);
     }
   } catch (e) {
     log(`[k8s-sampler] ${(e as Error).message}`);

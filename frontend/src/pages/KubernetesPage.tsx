@@ -12,6 +12,7 @@ import { DataTable, type Column } from '@/components/DataTable';
 import { Chart } from '@/charts/Chart';
 import { fmtBytes, fmtNum } from '@/components/format';
 import { Chip, relTime } from '@/components/platform/kit';
+import { ObsWindowView } from '@/components/observability/ObsWindow';
 import '@/styles/kubernetes.css';
 
 /* ------------------------------------------------------------------ types */
@@ -48,8 +49,8 @@ interface Overview extends Meta {
   problems: Problem[]; recentWarnings: EventT[];
 }
 
-type Tab = 'overview' | 'workloads' | 'pods' | 'nodes' | 'events';
-const TABS: Tab[] = ['overview', 'workloads', 'pods', 'nodes', 'events'];
+type Tab = 'overview' | 'workloads' | 'pods' | 'nodes' | 'events' | 'trends';
+const TABS: Tab[] = ['overview', 'workloads', 'pods', 'nodes', 'events', 'trends'];
 
 /* ------------------------------------------------------------------ formatting */
 
@@ -158,6 +159,7 @@ export function KubernetesPage() {
             { key: 'pods', label: 'Pods', badge: meta?.counts.pods },
             { key: 'nodes', label: 'Nodes', badge: meta?.counts.nodes },
             { key: 'events', label: 'Events', badge: meta?.counts.warningEvents || undefined },
+            { key: 'trends', label: 'Trends' },
           ]} />
           {ov.error && <ConnError error={ov.error} conn={conn} />}
           {meta && meta.warnings.length > 0 && (
@@ -167,6 +169,7 @@ export function KubernetesPage() {
           {tab === 'workloads' && <WorkloadsTab conn={conn} refresh={refresh} openPods={openPods} />}
           {tab === 'pods' && <PodsTab conn={conn} refresh={refresh} filter={podFilter} setFilter={setPodFilter} namespaces={meta?.namespaces.map((n) => n.name) ?? []} />}
           {tab === 'nodes' && <NodesTab conn={conn} refresh={refresh} openPods={openPods} />}
+          {tab === 'trends' && <ObsWindowView preset="k8s" group={`k8s-window-${conn.id}`} dims={['namespace', 'workload', 'pod', 'node']} fixedFilters={{ cluster: [conn.id] }} />}
           {tab === 'events' && <EventsTab conn={conn} refresh={refresh} namespaces={meta?.namespaces.map((n) => n.name) ?? []} />}
         </>
       )}

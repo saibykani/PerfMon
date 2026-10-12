@@ -66,6 +66,8 @@ export type ResultStatus = 'PASS' | 'PASS_WITH_WARNINGS' | 'FAIL' | 'INCONCLUSIV
 export function classifyResult(input: {
   runStatus: string; summary: any; sla: { results: any[] }; regressions: RegressionFinding[]; infra: InfraAggregates;
   defaults: { errorPctFail: number; errorPctWarn: number }; targetTps: number | null;
+  /** Load generator health; SATURATED adds a "Load Generator: WARNING" dimension (never turns a run into FAIL). */
+  loadgen?: { status: 'HEALTHY' | 'WARNING' | 'SATURATED' | 'NO_DATA'; hosts?: string[] } | null;
 }) {
   const s = input.summary;
   const breakdown: Record<string, 'PASS' | 'WARNING' | 'FAIL' | 'N/A'> = {};
@@ -89,6 +91,7 @@ export function classifyResult(input: {
   breakdown.CPU = cpuSla !== 'N/A' ? cpuSla : input.infra.cpuP90 == null ? 'N/A' : input.infra.cpuP90 >= 90 ? 'FAIL' : input.infra.cpuP90 >= 80 ? 'WARNING' : 'PASS';
   const regs = input.regressions.filter((r) => r.direction === 'REGRESSION');
   breakdown.Regression = regs.some((r) => r.severity === 'CRITICAL') ? 'WARNING' : regs.length ? 'WARNING' : 'PASS';
+  if (input.loadgen && input.loadgen.status !== 'NO_DATA') breakdown['Load Generator'] = input.loadgen.status === 'SATURATED' ? 'WARNING' : 'PASS';
 
   for (const [k, v] of Object.entries(breakdown)) if (v === 'FAIL' || v === 'WARNING') reasons.push(`${k}: ${v}`);
   let result: ResultStatus;
@@ -98,5 +101,6 @@ export function classifyResult(input: {
   else result = 'PASS';
   if (input.runStatus === 'ABORTED' && result !== 'FAIL') { result = 'INCONCLUSIVE'; reasons.unshift('Run was aborted before completion'); }
   if (s.total_samples < 100 && result !== 'FAIL') { result = 'INCONCLUSIVE'; reasons.unshift(`Only ${s.total_samples} samples — not enough data for a reliable verdict`); }
+  if (input.loadgen?.status === 'SATURATED') reasons.unshift(`Load generator saturated — results may be unreliable${input.loadgen.hosts?.length ? ` (${input.loadgen.hosts.join(', ')})` : ''}`);
   return { result, breakdown, reasons };
 }

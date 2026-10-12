@@ -9,13 +9,16 @@ import { resolveRun } from '../ingest/runCache.js';
 import { createReport, sweepStaleReports, GENERATABLE_TYPES, type ReportParams } from './generate.js';
 import { renderHtml, renderPdf, renderCsv, renderXlsx } from './render.js';
 import type { ReportContent } from './content.js';
+import { parseFilters, parseMetricKeys, resolveWindow } from '../observability/pure.js';
+import { METRIC_KEYS } from '../observability/catalog.js';
+import { input as obsInput } from '../observability/routes.js';
 
 const FORMATS = ['html', 'pdf', 'csv', 'json', 'xlsx'] as const;
 const MIME: Record<(typeof FORMATS)[number], string> = {
   html: 'text/html; charset=utf-8', pdf: 'application/pdf', csv: 'text/csv; charset=utf-8', json: 'application/json; charset=utf-8',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
-const TYPE_LABEL: Record<string, string> = { TEST_EXECUTION: 'Test Execution Report', COMPARISON: 'Comparison Report', EXECUTIVE: 'Executive Summary', SLA: 'SLA Compliance Report', TREND: 'Trend Report' };
+const TYPE_LABEL: Record<string, string> = { TEST_EXECUTION: 'Test Execution Report', COMPARISON: 'Comparison Report', EXECUTIVE: 'Executive Summary', SLA: 'SLA Compliance Report', TREND: 'Trend Report', OBSERVABILITY: 'Observability Report' };
 
 const SELECT = `
   SELECT rp.id, rp.project_id, rp.run_id, rp.type, rp.title, rp.version, rp.status, rp.params, rp.error, rp.created_by, rp.created_at, rp.updated_at,
@@ -89,11 +92,14 @@ export async function reportRoutes(app: FastifyInstance) {
     ...exportPerm,
     schema: {
       tags: ['Reports'], summary: 'Generate a report (queued; poll GET /reports/:id until READY)',
-      description: 'TEST_EXECUTION: runId. COMPARISON: runIds (2–6, first is the reference). EXECUTIVE and SLA: projectId + optional from/to (default last 30 days), testId, environmentId. TREND: params.testId (+ optional from/to, default last 90 days, environmentId). Re-generating the same subject creates version N+1.',
+      description: 'TEST_EXECUTION: runId. COMPARISON: runIds (2–6, first is the reference). EXECUTIVE and SLA: projectId + optional from/to (default last 30 days), testId, environmentId. TREND: params.testId (+ optional from/to, default last 90 days, environmentId). OBSERVABILITY: params.from/to (ISO with timezone, ≤ 90 days), params.filters (same keys as /observability/series), optional params.metrics and params.title. Re-generating the same subject creates version N+1.',
       body: z.object({
         type: z.enum(GENERATABLE_TYPES), projectId: z.string().uuid().optional(), runId: z.string().optional(), runIds: z.array(z.string()).min(2).max(6).optional(),
         title: z.string().trim().min(1).max(200).optional(),
-        params: z.object({ from: z.string().optional(), to: z.string().optional(), testId: z.string().uuid().optional(), environmentId: z.string().uuid().optional() }).optional(),
+        params: z.object({
+          from: z.string().optional(), to: z.string().optional(), testId: z.string().uuid().optional(), environmentId: z.string().uuid().optional(),
+          filters: z.record(z.string(), z.union([z.string().max(10000), z.array(z.string().max(253)).max(100)])).optional(), metrics: z.array(z.string().max(60)).max(40).optional(), title: z.string().trim().min(1).max(200).optional(),
+        }).optional(),
       }),
     },
   }, async (req, reply) => {
@@ -119,6 +125,21 @@ export async function reportRoutes(app: FastifyInstance) {
       if (b.projectId) await assertProject(req, b.projectId);
       params.runIds = refs.map((x) => x.id); params.runKeys = refs.map((x) => x.runKey);
       title = b.title ?? `${TYPE_LABEL.COMPARISON} — ${refs.map((x) => x.runKey).join(' vs ')}`;
+    } else if (b.type === 'OBSERVABILITY') {
+      const win = obsInput(() => resolveWindow(b.params?.from, b.params?.to));
+      const filters = obsInput(() => parseFilters(b.params?.filters ?? {}));
+      const metrics = b.params?.metrics?.length ? obsInput(() => parseMetricKeys(b.params!.metrics, METRIC_KEYS)) : undefined;
+      if (p.projectId) {
+        if (filters.projectId?.some((x) => x !== p.projectId)) throw badRequest('API key is not authorized for the requested project(s)');
+        filters.projectId = [p.projectId];
+      }
+      for (const id of filters.projectId ?? []) await assertProject(req, id);
+      const pid = b.projectId ?? filters.projectId?.[0] ?? p.projectId;
+      if (!pid) throw badRequest('projectId (or params.filters.projectId) is required for an OBSERVABILITY report');
+      projectId = (await assertProject(req, pid)).id;
+      Object.assign(params, { from: win.from.toISOString(), to: win.to.toISOString(), filters, ...(metrics ? { metrics } : {}) });
+      const fmt = (d: Date) => d.toISOString().slice(0, 16).replace('T', ' ');
+      title = b.title ?? b.params?.title ?? `${TYPE_LABEL.OBSERVABILITY} — ${fmt(win.from)} to ${fmt(win.to)} UTC`;
     } else {
       let pid = b.projectId ?? p.projectId;
       let testName: string | null = null;

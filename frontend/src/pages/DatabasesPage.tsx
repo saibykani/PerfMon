@@ -16,6 +16,7 @@ import { RunSelectorBar, useRunSelection } from '@/components/run/RunPicker';
 import { MetricGrid } from '@/components/run/tabs/InfraTabs';
 import { dbQuery, dbStats, useDbAcrossRuns, useRecentRuns, withPool, type DbStats } from '@/components/databases/dbData';
 import { IngestGuide } from '@/components/databases/IngestGuide';
+import { ObsWindowView, ViewModeToggle, useViewMode } from '@/components/observability/ObsWindow';
 import '@/styles/run.css';
 import '@/styles/databases.css';
 
@@ -23,6 +24,7 @@ const poolStatus = (v: number | null) => (v == null ? null : v >= 90 ? 'fail' : 
 
 export function DatabasesPage() {
   const sel = useRunSelection();
+  const [mode, setMode] = useViewMode();
   const f = useFilters();
   const theme = useUi((s) => s.theme);
   const db = useQuery({ ...dbQuery(sel.runId ?? ''), enabled: !!sel.runId });
@@ -81,6 +83,12 @@ export function DatabasesPage() {
     <div className="dbm-page">
       <PageHeader title="Databases" subtitle="Database health per test run — query latency, connection pool, slow queries, locks and resource use — and how it moves across runs."
         actions={<Link className="btn" to="/help/database-monitoring"><BookOpen size={14} />Database monitoring guide</Link>} />
+      <ViewModeToggle mode={mode} onChange={setMode} />
+      {mode === 'time' ? (
+        <div className="stack">
+          <ObsWindowView preset="databases" group="db-window" dims={['projectId', 'environmentId', 'runId', 'hostId', 'databaseId']} />
+        </div>
+      ) : <>
       <RunSelectorBar sel={sel} />
 
       {noRun ? (
@@ -170,6 +178,7 @@ export function DatabasesPage() {
           {targets.length > 0 && <IngestGuide kind="database" title="Send more database metrics" />}
         </div>
       )}
+      </>}
     </div>
   );
 }

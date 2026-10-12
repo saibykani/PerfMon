@@ -13,6 +13,7 @@ import { TransactionsView, EndpointsView } from '@/components/run/TxnViews';
 import { OverviewTab, useTimeline } from '@/components/run/tabs/OverviewTab';
 import { ResponseTimeTab, ThroughputTab, ErrorsTab } from '@/components/run/tabs/PerfTabs';
 import { InfrastructureTab, JvmTab, DatabaseTab } from '@/components/run/tabs/InfraTabs';
+import { LoadgenTab, LoadgenBanner, useLoadgen } from '@/components/run/tabs/LoadgenTab';
 import { LogsTab, EventsTab } from '@/components/run/tabs/LogsEventsTabs';
 import { SlaTab, ComparisonTab, InsightsTab } from '@/components/run/tabs/AnalysisTabs';
 import { ArtifactsTab, HtmlReportTab } from '@/components/run/tabs/ArtifactTabs';
@@ -21,7 +22,7 @@ import type { Deltas } from '@/components/run/RunKpis';
 import type { RunDetail, TimeWindow } from '@/components/run/types';
 import '@/styles/run.css';
 
-const TAB_KEYS = ['overview', 'live', 'transactions', 'apis', 'response-time', 'throughput', 'errors', 'infrastructure', 'jvm', 'database', 'logs', 'events', 'sla', 'comparison', 'insights', 'artifacts', 'html-report', 'raw', 'audit'] as const;
+const TAB_KEYS = ['overview', 'live', 'transactions', 'apis', 'response-time', 'throughput', 'errors', 'infrastructure', 'load-generators', 'jvm', 'database', 'logs', 'events', 'sla', 'comparison', 'insights', 'artifacts', 'html-report', 'raw', 'audit'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 /** Default tab per stakeholder view (spec: role-adapted emphasis). */
@@ -47,6 +48,7 @@ export function RunDetailPage() {
   const run = q.data;
   const deltas = useQuery({ queryKey: ['run-sub', runId, 'kpi-deltas'], queryFn: () => api.get<{ baseline: any; deltas: Deltas }>(`/runs/${encodeURIComponent(runId)}/kpi-deltas`), enabled: !!run && run.status !== 'RUNNING' });
   const live = run?.status === 'RUNNING';
+  const loadgen = useLoadgen(runId, !!run);
 
   const active: TabKey = (TAB_KEYS as readonly string[]).includes(tab ?? '') ? (tab as TabKey) : live ? 'live' : VIEW_DEFAULT[view] ?? 'overview';
   const goTab = useCallback((t: string, search = '') => nav(`/runs/${encodeURIComponent(runId)}${t === 'overview' ? '/overview' : `/${t}`}${search}`), [nav, runId]);
@@ -59,7 +61,9 @@ export function RunDetailPage() {
       { key: 'live', label: 'Live Metrics', badge: live ? <span className="dot live-dot live-ink" /> : undefined },
       { key: 'transactions', label: 'Transactions' }, { key: 'apis', label: 'APIs' }, { key: 'response-time', label: 'Response Time' }, { key: 'throughput', label: 'Throughput' },
       { key: 'errors', label: 'Errors', badge: run?.summary?.failedRequests ? run.summary.failedRequests.toLocaleString() : undefined },
-      { key: 'infrastructure', label: 'Infrastructure' }, { key: 'jvm', label: 'JVM' }, { key: 'database', label: 'Database' },
+      { key: 'infrastructure', label: 'Infrastructure' },
+      { key: 'load-generators', label: 'Load Generators', badge: loadgen.data?.status === 'SATURATED' ? <span className="ink-fail">saturated</span> : loadgen.data?.status === 'WARNING' ? <span className="ink-warn">warning</span> : undefined },
+      { key: 'jvm', label: 'JVM' }, { key: 'database', label: 'Database' },
       { key: 'logs', label: 'Logs' }, { key: 'events', label: 'Events', badge: c?.alerts || undefined },
       { key: 'sla', label: 'SLA', badge: c?.sla_failures ? <span className="ink-fail">{c.sla_failures} fail</span> : undefined },
       { key: 'comparison', label: 'Comparison' },
@@ -72,7 +76,7 @@ export function RunDetailPage() {
     const pref = VIEW_DEFAULT[view];
     if (pref && pref !== 'overview') { const i = t.findIndex((x) => x.key === pref); const [p] = t.splice(i, 1); t.splice(1, 0, p); }
     return t;
-  }, [run, live, view]);
+  }, [run, live, view, loadgen.data?.status]);
 
   if (q.error) {
     const nf = q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403);
@@ -87,6 +91,7 @@ export function RunDetailPage() {
       <RunHeader run={run} live={live} onNotice={onNotice} />
       {run.status === 'ANALYZING' && <div className="notice analyzing"><Loader2 size={14} className="spin" /> Analysis in progress — summary, SLA, regression, bottleneck and insight results appear automatically.</div>}
       {notice && <div className={`toast ${notice.kind}`} role="status">{notice.kind === 'ok' ? <CheckCircle2 size={15} /> : <XCircle size={15} />}{notice.msg}</div>}
+      {active !== 'load-generators' && <LoadgenBanner data={loadgen.data} onOpen={() => goTab('load-generators')} />}
       <div className="run-tabs">
         <Tabs tabs={tabs} value={active} onChange={(k) => goTab(k)} />
         {VIEW_DEFAULT[view] && <span className="view-hint muted small" title="Default tab and KPI emphasis follow your stakeholder view (profile menu).">View: {VIEW_LABEL[view] ?? view}</span>}
@@ -100,6 +105,7 @@ export function RunDetailPage() {
         {active === 'throughput' && <ThroughputTab run={run} live={live} />}
         {active === 'errors' && <ErrorsTab run={run} />}
         {active === 'infrastructure' && <InfrastructureTab run={run} />}
+        {active === 'load-generators' && <LoadgenTab run={run} />}
         {active === 'jvm' && <JvmTab run={run} />}
         {active === 'database' && <DatabaseTab run={run} />}
         {active === 'logs' && <LogsTab run={run} />}

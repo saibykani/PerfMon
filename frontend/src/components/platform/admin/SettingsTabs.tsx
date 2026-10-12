@@ -12,6 +12,7 @@ type Settings = {
   score_weights: Record<string, number>;
   regression_thresholds: Record<string, number>;
   default_result_thresholds: { errorPctFail: number; errorPctWarn: number };
+  loadgen_thresholds?: Record<string, number>;
   retention: Record<string, number>;
   _meta?: Record<string, { updatedAt: string; updatedBy: string | null }>;
   _defaults?: Omit<Settings, '_meta' | '_defaults'>;
@@ -60,6 +61,7 @@ export function SettingsTab() {
         <RegressionCard s={q.data} />
         <ResultCard s={q.data} />
       </div>
+      {q.data.loadgen_thresholds && <LoadgenCard s={q.data} />}
     </div>
   );
 }
@@ -165,6 +167,48 @@ function ResultCard({ s }: { s: Settings }) {
         </div>
       )}
       <div className="pf-sub" style={{ marginTop: 10 }}>Applied only to tests without an SLA profile, to classify a run’s result from its error rate.</div>
+    </Card>
+  );
+}
+
+const LOADGEN: { key: string; label: string }[] = [
+  { key: 'cpuWarnPct', label: 'CPU warning' }, { key: 'cpuCritPct', label: 'CPU critical' },
+  { key: 'memWarnPct', label: 'Memory warning' }, { key: 'memCritPct', label: 'Memory critical' },
+  { key: 'heapWarnPct', label: 'JMeter heap warning' }, { key: 'heapCritPct', label: 'JMeter heap critical' },
+  { key: 'minSharePct', label: 'Min. share of samples' },
+];
+
+function LoadgenCard({ s }: { s: Settings }) {
+  const cur = s.loadgen_thresholds ?? {};
+  const [v, setV] = useState(numStr(cur));
+  useEffect(() => setV(numStr(s.loadgen_thresholds ?? {})), [s.loadgen_thresholds]);
+  const save = useSaveSetting('loadgen_thresholds', 'Load generator thresholds');
+  const errs: Record<string, string> = {};
+  for (const f of LOADGEN) { const n = Number(v[f.key]); if (v[f.key] === '' || v[f.key] == null || !(n >= 0 && n <= 100)) errs[f.key] = '0 – 100'; }
+  for (const k of ['cpu', 'mem', 'heap']) if (!errs[`${k}WarnPct`] && !errs[`${k}CritPct`] && Number(v[`${k}WarnPct`]) > Number(v[`${k}CritPct`])) errs[`${k}WarnPct`] = 'Must be ≤ critical';
+  const dirty = JSON.stringify(v) !== JSON.stringify(numStr(cur));
+  const defaults = (s._defaults as any)?.loadgen_thresholds as Record<string, number> | undefined;
+  return (
+    <Card title="Load generator thresholds" actions={<>
+      <MetaLine m={s._meta?.loadgen_thresholds} />
+      {defaults && <button className="btn btn-sm btn-ghost" onClick={() => setV(numStr(defaults))}><RotateCcw size={12} />Defaults</button>}
+      <button className="btn btn-sm btn-primary" disabled={!dirty || !!Object.keys(errs).length || save.isPending} onClick={() => save.mutate(Object.fromEntries(LOADGEN.map((f) => [f.key, Number(v[f.key])])))}><Save size={12} />Save</button>
+    </>}>
+      <div className="pf-form-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
+        {LOADGEN.map((f) => (
+          <FormField key={f.key} label={f.label} error={errs[f.key]}>
+            <div className="pf-input-unit"><input className="input num" inputMode="decimal" value={v[f.key] ?? ''} onChange={(e) => setV({ ...v, [f.key]: e.target.value })} /><span className="pf-unit">%</span></div>
+          </FormField>
+        ))}
+      </div>
+      <div className="row wrap" style={{ marginTop: 12, gap: 6 }}>
+        <Chip tone="pass">Healthy</Chip><Chip tone="warn">Warning ≥ warning threshold</Chip><Chip tone="fail">Saturated ≥ critical threshold</Chip>
+      </div>
+      <div className="pf-sub" style={{ marginTop: 10 }}>
+        Applied to load generators (servers with role <b>loadgen</b>, e.g. reported by the Perfmon Collector started by the wrapper scripts). A level is reached when at least
+        the minimum share of samples is at or above the threshold. A saturated load generator adds the insight “Load generator saturated — results may be unreliable” and a
+        <b> Load Generator: WARNING</b> dimension to the run result (a passing run becomes Pass with warnings; it never becomes Fail). Applies to runs analysed after saving — use Re-analyze on a run to update its insights and result (the Load Generators tab always uses the current thresholds).
+      </div>
     </Card>
   );
 }
