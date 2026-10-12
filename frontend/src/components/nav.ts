@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, FolderKanban, Boxes, FlaskConical, PlayCircle, LayoutGrid, Radio, ArrowLeftRight, Network, Server, Activity,
-  Database, MonitorCog, ShieldCheck, Bell, Lightbulb, TrendingDown, GitCompare, LineChart, Gauge, FileText, Paperclip, Tag, Plug, Settings, BookOpen, CalendarClock,
+  Database, MonitorCog, Container, ShieldCheck, Bell, Lightbulb, TrendingDown, GitCompare, LineChart, Gauge, FileText, Paperclip, Tag, Plug, Settings, BookOpen, CalendarClock,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -21,6 +21,7 @@ export const NAV: NavItem[] = [
   { to: '/infrastructure', label: 'Infrastructure', icon: Server, section: 'Observability' },
   { to: '/app-monitoring', label: 'Applications Monitoring', icon: Activity, section: 'Observability' },
   { to: '/databases', label: 'Databases', icon: Database, section: 'Observability' },
+  { to: '/kubernetes', label: 'Kubernetes', icon: Container, section: 'Observability' },
   { to: '/events', label: 'Events & Annotations', icon: CalendarClock, section: 'Observability' },
   { to: '/sla', label: 'SLA / SLO', icon: ShieldCheck, section: 'Analysis' },
   { to: '/alerts', label: 'Alerts', icon: Bell, section: 'Analysis' },

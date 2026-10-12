@@ -59,9 +59,8 @@ export async function snapshotDirect(c: KubeConn): Promise<Snapshot> {
     settle(listNs(c, '/apis/metrics.k8s.io/v1beta1', 'pods'), [] as any[]),
     settle(kubeGet(c, '/apis/metrics.k8s.io/v1beta1/nodes').then((r) => r.items ?? []), [] as any[]),
   ]);
-  // fatal: cannot reach the cluster or read pods at all
-  if (!podsR.ok && (!ver.ok || podsR.error?.kind === 'auth')) throw podsR.error ?? ver.error!;
-  if (!ver.ok && !podsR.ok) throw ver.error!;
+  // fatal: cannot reach the cluster or read pods at all (everything else degrades to a warning)
+  if (!podsR.ok) throw podsR.error!;
   for (const [what, r] of [['pods', podsR], ['nodes', nodesR], ['namespaces', nsR], ['deployments', depR], ['statefulsets', stsR], ['daemonsets', dsR], ['replicasets', rsR], ['jobs', jobR], ['events', evR]] as const) {
     if (!r.ok) warnings.push(`${what}: ${r.error?.message}`);
   }
@@ -323,7 +322,7 @@ export async function podDetailDirect(c: KubeConn, ns: string, name: string) {
     volumes: (p.spec?.volumes ?? []).map(volumeOf),
     events: ev.value.map(mapEvent).sort((a: EventItem, b: EventItem) => String(b.lastAt).localeCompare(String(a.lastAt))).slice(0, 100),
     metricsAvailable: met.ok,
-    warnings: [...(ev.ok ? [] : [`events: ${ev.error?.message}`]), ...(met.ok ? [] : [`usage: ${met.error?.message}`])],
+    warnings: [...(ev.ok ? [] : [`events: ${ev.error?.message}`]), ...(met.ok || met.error?.status === 404 ? [] : [`usage: ${met.error?.message}`])],
   };
 }
 

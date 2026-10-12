@@ -17,7 +17,7 @@ import type { Credentials, ImportQuery, IntegrationRecord, RunWindow } from './c
 import { OTLP_RUN_ATTRIBUTES } from './connectors/opentelemetry.js';
 import { storeImportedSeries } from './store.js';
 
-const TYPES = ['JMETER', 'INFLUXDB', 'PROMETHEUS', 'GRAFANA', 'DYNATRACE', 'OPENTELEMETRY', 'JENKINS', 'GITHUB_ACTIONS', 'GITLAB', 'AZURE_DEVOPS'] as const;
+const TYPES = ['JMETER', 'INFLUXDB', 'PROMETHEUS', 'GRAFANA', 'DYNATRACE', 'OPENTELEMETRY', 'JENKINS', 'GITHUB_ACTIONS', 'GITLAB', 'AZURE_DEVOPS', 'KUBERNETES'] as const;
 const AUTH = ['NONE', 'TOKEN', 'BASIC', 'API_KEY'] as const;
 
 const querySchema = z.object({

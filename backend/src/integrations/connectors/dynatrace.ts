@@ -55,18 +55,22 @@ export const dynatraceConnector: Connector = {
   category: 'APM',
   authTypes: ['API_KEY', 'TOKEN'],
   fields: [
-    { key: 'apiToken', label: 'API token (metrics.read)', required: true, secret: true },
+    { key: 'apiToken', label: 'API token (metrics.read, entities.read; events.read optional)', required: true, secret: true, help: 'metrics.read for run imports; entities.read + metrics.read for Observability → Kubernetes; events.read adds cluster events.' },
     { key: 'entitySelector', label: 'Entity selector (optional, e.g. type(HOST),tag(perf))', required: false },
+    { key: 'k8sCluster', label: 'Kubernetes cluster (optional, for the Kubernetes module)', required: false, placeholder: 'prod-eu-1', help: 'Dynatrace display name of the KUBERNETES_CLUSTER entity. Empty = all clusters.' },
   ],
   supportsImport: true,
-  docs: 'Imports host, service and JVM metrics for a run window through the Dynatrace Metrics API v2 (GET /api/v2/metrics/query, header "Authorization: Api-Token <token>", scope metrics.read). URL = https://<env-id>.live.dynatrace.com (or the Managed /e/<env-id> URL). config.mappings: [{ metric, target, query: "<metric selector>", scale? }]; optional config.entitySelector narrows entities. Defaults: builtin:host.cpu.usage, builtin:host.mem.usage, builtin:service.response.time (µs→ms), builtin:service.requestCount.total (per minute → per second), builtin:service.errors.total.rate.',
+  docs: 'Imports host, service and JVM metrics for a run window through the Dynatrace Metrics API v2 (GET /api/v2/metrics/query, header "Authorization: Api-Token <token>", scope metrics.read). URL = https://<env-id>.live.dynatrace.com (or the Managed /e/<env-id> URL). config.mappings: [{ metric, target, query: "<metric selector>", scale? }]; optional config.entitySelector narrows entities. Also usable as a data source for Observability → Kubernetes: reads KUBERNETES_CLUSTER / KUBERNETES_NODE / CLOUD_APPLICATION_NAMESPACE / CLOUD_APPLICATION (workloads) / CLOUD_APPLICATION_INSTANCE (pods) via GET /api/v2/entities (scope entities.read) and builtin:kubernetes.* metrics (metrics.read); events.read optionally adds cluster events. Defaults: builtin:host.cpu.usage, builtin:host.mem.usage, builtin:service.response.time (µs→ms), builtin:service.requestCount.total (per minute → per second), builtin:service.errors.total.rate.',
   defaultQueries: () => DEFAULTS,
 
   async test(i: IntegrationRecord, c: Credentials) {
     return probe(async () => {
       const base = requireUrl(i);
       const r = expectOk(await http(joinUrl(base, '/api/v2/metrics?pageSize=1&fields=displayName'), { headers: headers(c) }), 'Dynatrace Metrics API');
-      return { message: `Connected to Dynatrace Metrics API v2; ${r.json?.totalCount ?? 'n/a'} metrics available`, details: { totalCount: r.json?.totalCount } };
+      // optional: Kubernetes entities (entities.read) for the Kubernetes module — reported, never fatal
+      const k = await http(joinUrl(base, `/api/v2/entities?${new URLSearchParams({ entitySelector: 'type("KUBERNETES_CLUSTER")', pageSize: '50', from: 'now-3d' })}`), { headers: headers(c) });
+      const k8s = k.ok ? `${(k.json?.entities ?? []).length} Kubernetes cluster(s) visible` : k.status === 403 ? 'token lacks entities.read (needed for the Kubernetes module)' : `entities API HTTP ${k.status}`;
+      return { message: `Connected to Dynatrace Metrics API v2; ${r.json?.totalCount ?? 'n/a'} metrics available; ${k8s}`, details: { totalCount: r.json?.totalCount, k8sClusters: k.ok ? (k.json?.entities ?? []).map((e: any) => e.displayName) : null } };
     });
   },
 

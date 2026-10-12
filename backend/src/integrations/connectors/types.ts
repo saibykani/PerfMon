@@ -70,7 +70,7 @@ export interface TestResult {
   details?: unknown;
 }
 
-export interface FieldDef { key: string; label: string; required: boolean; secret?: boolean; placeholder?: string; help?: string }
+export interface FieldDef { key: string; label: string; required: boolean; secret?: boolean; placeholder?: string; help?: string; kind?: 'text' | 'multiline' | 'boolean' }
 
 export interface Connector {
   type: string;

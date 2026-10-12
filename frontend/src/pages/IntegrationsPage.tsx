@@ -14,7 +14,7 @@ import {
 } from '@/components/platform/kit';
 import * as S from '@/components/platform/snippets';
 
-interface FieldDef { key: string; label: string; required: boolean; secret?: boolean; placeholder?: string; help?: string }
+interface FieldDef { key: string; label: string; required: boolean; secret?: boolean; placeholder?: string; help?: string; kind?: 'text' | 'multiline' | 'boolean' }
 interface ImportQuery { metric: string; query: string; target: 'server' | 'jvm' | 'database' | 'service' | 'custom'; serverName?: string; serviceName?: string; scale?: number; transform?: 'invert_pct'; role?: string }
 interface IType { type: string; label: string; category: string; authTypes: string[]; fields: FieldDef[]; supportsImport: boolean; docs: string; defaultMappings?: ImportQuery[] }
 interface Integration {
@@ -26,7 +26,7 @@ interface ImportRes { imported: number; series: number; warnings: string[]; runI
 
 const CATEGORY_LABEL: Record<string, string> = { LOAD_TESTING: 'Load testing', METRICS: 'Metrics', APM: 'APM', OBSERVABILITY: 'Observability', CI_CD: 'CI/CD', DASHBOARDS: 'Dashboards' };
 const BRAND: Record<string, [string, string]> = {
-  JMETER: ['#d22128', 'JM'], INFLUXDB: ['#9b2aff', 'IX'], PROMETHEUS: ['#e6522c', 'PR'], GRAFANA: ['#f46800', 'GF'], DYNATRACE: ['#1496ff', 'DT'], OPENTELEMETRY: ['#425cc7', 'OT'],
+  JMETER: ['#d22128', 'JM'], INFLUXDB: ['#9b2aff', 'IX'], PROMETHEUS: ['#e6522c', 'PR'], GRAFANA: ['#f46800', 'GF'], DYNATRACE: ['#1496ff', 'DT'], OPENTELEMETRY: ['#425cc7', 'OT'], KUBERNETES: ['#326ce5', 'K8'],
   JENKINS: ['#335061', 'JK'], GITHUB_ACTIONS: ['#24292f', 'GH'], GITLAB: ['#fc6d26', 'GL'], AZURE_DEVOPS: ['#0078d4', 'AZ'],
 };
 const AUTH_LABEL: Record<string, string> = { NONE: 'None', TOKEN: 'Bearer token', BASIC: 'Basic auth', API_KEY: 'API key' };
@@ -277,7 +277,9 @@ function IntegrationForm({ type, item, onClose }: { type: IType; item: Integrati
           )}
           {configFields.map((f) => (
             <FormField key={f.key} label={f.label} required={f.required} error={err(f.key)} hint={f.help}>
-              <input className="input" value={config[f.key] ?? ''} placeholder={f.placeholder} onChange={(e) => setConfig((c) => ({ ...c, [f.key]: e.target.value }))} />
+              {f.kind === 'boolean'
+                ? <Toggle checked={/^(true|1|yes|on)$/i.test(config[f.key] ?? '')} onChange={(v) => setConfig((c) => ({ ...c, [f.key]: v ? 'true' : '' }))} label={config[f.key] === 'true' ? 'On' : 'Off'} />
+                : <input className="input" value={config[f.key] ?? ''} placeholder={f.placeholder} onChange={(e) => setConfig((c) => ({ ...c, [f.key]: e.target.value }))} />}
             </FormField>
           ))}
         </div>
@@ -287,7 +289,9 @@ function IntegrationForm({ type, item, onClose }: { type: IType; item: Integrati
             <div className="pf-form-grid">
               {secretFields.map((f) => (
                 <FormField key={f.key} label={f.label} required={f.required && !stored.has(f.key)} error={err(f.key)} hint={f.help}>
-                  <SecretInput value={creds[f.key] ?? ''} onChange={(v) => setCreds((c) => ({ ...c, [f.key]: v }))} hasSecret={stored.has(f.key)} placeholder={f.placeholder} />
+                  {f.kind === 'multiline' && (!stored.has(f.key) || creds[f.key] != null)
+                    ? <textarea className="textarea mono" rows={4} spellCheck={false} value={creds[f.key] ?? ''} placeholder={f.placeholder ?? '-----BEGIN CERTIFICATE-----'} onChange={(e) => setCreds((c) => ({ ...c, [f.key]: e.target.value }))} />
+                    : <SecretInput value={creds[f.key] ?? ''} onChange={(v) => setCreds((c) => ({ ...c, [f.key]: v }))} hasSecret={stored.has(f.key)} placeholder={f.placeholder} />}
                 </FormField>
               ))}
             </div>
@@ -307,7 +311,7 @@ function IntegrationForm({ type, item, onClose }: { type: IType; item: Integrati
 }
 
 const placeholderUrl = (t: string) => ({
-  INFLUXDB: 'http://influxdb:8086', PROMETHEUS: 'http://prometheus:9090', GRAFANA: 'https://grafana.example.com', DYNATRACE: 'https://abc12345.live.dynatrace.com',
+  INFLUXDB: 'http://influxdb:8086', PROMETHEUS: 'http://prometheus:9090', GRAFANA: 'https://grafana.example.com', DYNATRACE: 'https://abc12345.live.dynatrace.com', KUBERNETES: 'https://k8s-api.example.com:6443',
   JENKINS: 'https://jenkins.example.com', GITHUB_ACTIONS: 'https://api.github.com', GITLAB: 'https://gitlab.com', AZURE_DEVOPS: 'https://dev.azure.com/<organization>',
 } as Record<string, string>)[t] ?? 'https://';
 

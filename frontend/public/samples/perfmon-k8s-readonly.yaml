@@ -1,0 +1,61 @@
+# Perfmon — read-only access for Observability → Kubernetes
+# kubectl apply -f perfmon-k8s-readonly.yaml
+# Token: kubectl -n perfmon-monitoring get secret perfmon-reader-token -o jsonpath='{.data.token}' | base64 -d
+# CA:    kubectl -n perfmon-monitoring get secret perfmon-reader-token -o jsonpath='{.data.ca\.crt}'   (paste the base64 value as is)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: perfmon-monitoring
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: perfmon-reader
+  namespace: perfmon-monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: perfmon-reader
+rules:
+  # Note: no access to Secrets or ConfigMaps — Perfmon never reads secret values.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "nodes", "namespaces", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  - nonResourceURLs: ["/version", "/healthz"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: perfmon-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: perfmon-reader
+subjects:
+  - kind: ServiceAccount
+    name: perfmon-reader
+    namespace: perfmon-monitoring
+---
+# Long-lived token (Kubernetes ≥ 1.24 no longer creates one automatically)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: perfmon-reader-token
+  namespace: perfmon-monitoring
+  annotations:
+    kubernetes.io/service-account.name: perfmon-reader
+type: kubernetes.io/service-account-token
