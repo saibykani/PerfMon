@@ -1,0 +1,68 @@
+/* ================= APM overview ================= */
+.apm-page { min-width: 0; }
+
+/* tier flow */
+.apm-flow { display: flex; align-items: stretch; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.apm-node { flex: 1 1 0; min-width: 132px; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 8px; row-gap: 2px; align-items: center;
+  padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none; position: relative; transition: border-color .15s, transform .15s; }
+.apm-node:hover { text-decoration: none; transform: translateY(-1px); border-color: var(--border-strong); }
+.apm-node > svg { grid-row: span 2; color: var(--text-2); }
+.apm-node-title { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 58px; }
+.apm-node b { font-size: 20px; font-weight: 650; line-height: 1.1; }
+.apm-node-state { position: absolute; top: 8px; right: 10px; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; }
+.apm-node::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 0 0 12px 12px; background: var(--border); }
+.apm-node.lv-ok::after { background: var(--pass); } .apm-node.lv-warn::after { background: var(--warn); } .apm-node.lv-crit::after { background: var(--fail); }
+.apm-node.lv-ok .apm-node-state { color: var(--pass); } .apm-node.lv-warn .apm-node-state { color: var(--warn); } .apm-node.lv-crit .apm-node-state { color: var(--fail); } .apm-node.lv-none .apm-node-state { color: var(--text-3); }
+.apm-arrow { flex: none; align-self: center; color: var(--text-3); }
+
+/* status chip */
+.apm-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--neutral-soft); color: var(--text-2); white-space: nowrap; }
+.apm-chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.apm-chip.lv-ok { background: var(--pass-soft); color: var(--pass); } .apm-chip.lv-warn { background: var(--warn-soft); color: var(--warn); } .apm-chip.lv-crit { background: var(--fail-soft); color: var(--fail); }
+
+/* load test strip */
+.apm-runs { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.apm-runs-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.apm-runs-head .apm-chip { margin-left: auto; }
+.apm-runs-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 760px) { .apm-runs-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.apm-runs-kpis > div { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); }
+.apm-runs-kpis span { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+.apm-runs-kpis b { font-size: 18px; font-weight: 650; }
+.apm-runs-kpis em { font-style: normal; font-size: 11.5px; color: var(--text-3); }
+.apm-runs-list { display: flex; flex-direction: column; }
+.apm-runs-list a { display: grid; grid-template-columns: 190px minmax(0, 1fr) auto 14px; gap: 10px; align-items: center; padding: 6px 4px; border-top: 1px solid var(--border); color: var(--text); text-decoration: none; font-size: 12.5px; }
+.apm-runs-list a:hover { background: var(--surface-2); text-decoration: none; }
+@media (max-width: 760px) { .apm-runs-list a { grid-template-columns: 1fr auto; } .apm-runs-list a > :nth-child(2), .apm-runs-list a > svg { display: none; } }
+
+/* tiers */
+.apm-tier { display: flex; flex-direction: column; gap: 10px; scroll-margin-top: 12px; }
+.apm-tier-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.apm-tier-head h2 { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; }
+.apm-tier-head h2 .muted { font-weight: 500; font-size: 12.5px; }
+.apm-tier-counts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.apm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.apm-empty { padding: 14px; border: 1px dashed var(--border); border-radius: 12px; color: var(--text-3); font-size: 12.5px; text-align: center; }
+
+/* entity card */
+.apm-card { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none; overflow: hidden; transition: border-color .15s, transform .15s, box-shadow .15s; }
+.apm-card:hover { text-decoration: none; transform: translateY(-1px); border-color: var(--border-strong); box-shadow: 0 10px 24px -18px rgba(0,0,0,.5); }
+.apm-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--border); }
+.apm-card.lv-ok::before { background: var(--pass); } .apm-card.lv-warn::before { background: var(--warn); } .apm-card.lv-crit::before { background: var(--fail); }
+.apm-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.apm-card-name { min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.apm-card-name b { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.apm-role { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-2); }
+.apm-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; }
+.apm-m { display: flex; flex-direction: column; min-width: 0; }
+.apm-m span { font-size: 11px; color: var(--text-3); }
+.apm-m b { font-size: 15px; font-weight: 600; }
+.apm-m em { font-style: normal; font-size: 11px; color: var(--text-3); }
+.apm-m.lv-warn b { color: var(--warn); } .apm-m.lv-crit b { color: var(--fail); }
+.apm-spark { display: block; width: 100%; height: 28px; overflow: visible; }
+.apm-spark path { fill: none; stroke: var(--text-2); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.apm-card.lv-warn .apm-spark path { stroke: var(--warn); } .apm-card.lv-crit .apm-spark path { stroke: var(--fail); }
+.apm-spark.empty { height: 28px; display: grid; place-items: center; font-size: 11px; color: var(--text-3); border-radius: 6px; background: var(--surface-2); }
+.apm-card-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--text-3); }
+.apm-reason { color: var(--warn); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apm-card.lv-crit .apm-reason { color: var(--fail); }

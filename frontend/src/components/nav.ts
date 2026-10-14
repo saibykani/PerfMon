@@ -1,4 +1,5 @@
 import {
+  HeartPulse,
   LayoutDashboard, FolderKanban, Boxes, FlaskConical, PlayCircle, LayoutGrid, Radio, ArrowLeftRight, Network, Server, Activity,
   Database, MonitorCog, Container, ShieldCheck, Bell, Lightbulb, TrendingDown, GitCompare, LineChart, Gauge, FileText, Paperclip, Tag, Plug, Settings, BookOpen, CalendarClock, Compass,
   type LucideIcon,
@@ -13,6 +14,7 @@ export const NAV: NavItem[] = [
   { to: '/applications', label: 'Applications', icon: Boxes, section: 'Inventory' },
   { to: '/tests', label: 'Performance Tests', icon: FlaskConical, section: 'Testing' },
   { to: '/runs', label: 'Test Runs', icon: PlayCircle, section: 'Testing' },
+  { to: '/apm', label: 'APM overview', icon: HeartPulse, section: 'Observability' },
   { to: '/observability', label: 'Explorer', icon: Compass, section: 'Observability' },
   { to: '/dashboards', label: 'Dashboards', icon: LayoutGrid, section: 'Observability' },
   { to: '/live', label: 'Live Monitoring', icon: Radio, section: 'Observability' },
