@@ -14,7 +14,7 @@ There are two ways to get server metrics into a run's infrastructure views (a th
 
 ## The Perfmon Collector
 
-`collector/collector.mjs` has no dependencies and runs on Windows, Linux and macOS with Node.js 18+. Every 5 seconds it samples CPU %, memory %, memory used and the 1-minute load average, and sends them in batches to `POST /api/v1/ingest/infrastructure`. The server registers itself by name on first contact.
+`collector/collector.mjs` (also downloadable as [perfmon-collector.mjs](/samples/perfmon-collector.mjs)) has no dependencies and runs on Windows, Linux and macOS with Node.js 18+. Every 5 seconds it samples CPU %, memory %, memory used, disk usage, network rates (Linux/Windows), the 1-minute load average (Linux/macOS) and open file handles (Linux). It sends them in batches to `POST /api/v1/ingest/infrastructure`. The server registers itself by name on first contact. With role `loadgen`, it also reports the JMeter process and its JVM heap. See [Load generator monitoring](00g-load-generator-monitoring.md), which also lists every option (`--once` dry run, buffering, stop file).
 
 ### Configuration
 
@@ -28,6 +28,8 @@ There are two ways to get server metrics into a run's infrastructure views (a th
 | `PERFMON_SERVER` | no | host name | Name shown in Perfmon |
 | `PERFMON_ROLE` | no | `app` | `app`, `db`, `loadgen` or `gateway` |
 | `INTERVAL_SEC` | no | `5` | Sampling interval; batches are sent every 3 samples |
+
+The load generator itself is monitored automatically by the wrapper scripts — see [Load generator monitoring](00g-load-generator-monitoring.md).
 
 Leave `PERFMON_RUN_ID` empty for a permanent agent: it then attaches its data to whichever run is RUNNING in that environment.
 

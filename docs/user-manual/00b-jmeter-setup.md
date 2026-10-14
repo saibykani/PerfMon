@@ -154,6 +154,9 @@ curl -s -X POST -H "authorization: Bearer $PERFMON_API_KEY" "$PERFMON_URL/api/v1
 | `PERFMON_TEST` | yes | `200 TPS Payment Load` |
 | `PERFMON_BUILD` | no | CI build number |
 | `JMETER_ARGS` | no | extra JMeter options, e.g. `-Jusers=100 -Jduration=900` |
+| `PERFMON_LOADGEN_MONITOR` | no | `false` turns off load generator monitoring (default on) |
+
+With [perfmon-collector.mjs](/samples/perfmon-collector.mjs) next to the script and Node.js 18+ on `PATH`, the scripts also monitor the load generator during the test: host CPU, memory, JMeter process and JVM heap. A saturated load generator is flagged on the run. See [Load generator monitoring](00g-load-generator-monitoring.md).
 
 ## Distributed (remote) testing
 
@@ -164,7 +167,7 @@ jmeter -n -t plan.jmx -R loadgen-01,loadgen-02 -l results.jtl \
   -Gperfmon.url="$PERFMON_URL" -Gperfmon.runId="$RUN_ID" -Gperfmon.token="$PERFMON_API_KEY"
 ```
 
-Every engine must reach the Perfmon API on port 8080. Perfmon adds up the engines' requests, errors and bytes for the same Run ID. The **active threads** chart shows the highest single engine's value, not the sum of all engines — multiply by the engine count when you read virtual users.
+Every engine must reach the Perfmon API on port 8080. To monitor the engines' CPU, memory and JMeter heap, start the collector on each engine ([Load generator monitoring → distributed engines](00g-load-generator-monitoring.md#manual-distributed-jmeter-engines)). Perfmon adds up the engines' requests, errors and bytes for the same Run ID. The **active threads** chart shows the highest single engine's value, not the sum of all engines — multiply by the engine count when you read virtual users.
 
 ## Troubleshooting
 
