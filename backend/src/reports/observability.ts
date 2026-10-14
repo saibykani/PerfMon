@@ -11,7 +11,7 @@ import { CONFIDENTIALITY, fmtNum, type Column, type ColumnFmt, type Kpi, type Re
  * aligned buckets for charts, stats from raw samples.
  */
 
-export interface ObservabilityParams { from: string; to: string; filters?: Record<string, unknown>; metrics?: string[]; title?: string }
+export interface ObservabilityParams { from: string; to: string; filters?: Record<string, unknown>; metrics?: string[]; title?: string; orgWide?: boolean }
 
 const CHART_POINTS = 300;
 const CHART_SERIES = 8;
@@ -77,7 +77,7 @@ export async function buildObservabilityContent(opts: { orgId: string; projectId
   const from = new Date(p.from);
   const to = new Date(p.to);
   const f = parseFilters(p.filters ?? {});
-  if (!f.projectId?.length) f.projectId = [opts.projectId];
+  if (!f.projectId?.length && !p.orgWide) f.projectId = [opts.projectId];
   const scope: Scope = { orgId: opts.orgId, keyProjectId: null };
   const w = { from, to };
   const stepSec = reportStep(from.getTime(), to.getTime());
@@ -224,7 +224,7 @@ export async function buildObservabilityContent(opts: { orgId: string; projectId
     result: { status, score: null, breakdown: { 'Host CPU': cpu ? (cpu.s.stats.max! >= 90 ? 'FAIL' : cpu.s.stats.max! >= 75 ? 'WARNING' : 'PASS') : 'N/A', 'Host memory': mem ? (mem.s.stats.max! >= 90 ? 'FAIL' : mem.s.stats.max! >= 80 ? 'WARNING' : 'PASS') : 'N/A', 'Pod restarts': restarts.length ? (restarts[0].inc > 0 ? 'WARNING' : 'PASS') : 'N/A' } },
     cover: { label: 'Observability report', facts: [
       ['Window (UTC)', windowText], ['Duration', durText(to.getTime() - from.getTime())], ['Timezone', 'UTC'], ['Bucket', `${stepSec} s (avg)`],
-      ...(facts.length ? facts : [['Filters', 'none'] as [string, string]]),
+      ...(p.orgWide ? [['Scope', 'Whole organization'] as [string, string]] : []), ...(facts.length ? facts : [['Filters', 'none'] as [string, string]]),
       ['Entities', `${counts.hosts} hosts · ${counts.dbs} DBs · ${counts.svcs} services · ${counts.pods} pods · ${counts.runs} runs`],
     ] },
     sections,

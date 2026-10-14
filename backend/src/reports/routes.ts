@@ -92,7 +92,7 @@ export async function reportRoutes(app: FastifyInstance) {
     ...exportPerm,
     schema: {
       tags: ['Reports'], summary: 'Generate a report (queued; poll GET /reports/:id until READY)',
-      description: 'TEST_EXECUTION: runId. COMPARISON: runIds (2–6, first is the reference). EXECUTIVE and SLA: projectId + optional from/to (default last 30 days), testId, environmentId. TREND: params.testId (+ optional from/to, default last 90 days, environmentId). OBSERVABILITY: params.from/to (ISO with timezone, ≤ 90 days), params.filters (same keys as /observability/series), optional params.metrics and params.title. Re-generating the same subject creates version N+1.',
+      description: 'TEST_EXECUTION: runId. COMPARISON: runIds (2–6, first is the reference). EXECUTIVE and SLA: projectId + optional from/to (default last 30 days), testId, environmentId. TREND: params.testId (+ optional from/to, default last 90 days, environmentId). OBSERVABILITY: params.from/to (ISO with timezone, ≤ 90 days), params.filters (same keys as /observability/series), optional params.metrics and params.title; projectId optional — without a project filter the report covers the whole organization. Re-generating the same subject creates version N+1.',
       body: z.object({
         type: z.enum(GENERATABLE_TYPES), projectId: z.string().uuid().optional(), runId: z.string().optional(), runIds: z.array(z.string()).min(2).max(6).optional(),
         title: z.string().trim().min(1).max(200).optional(),
@@ -134,10 +134,26 @@ export async function reportRoutes(app: FastifyInstance) {
         filters.projectId = [p.projectId];
       }
       for (const id of filters.projectId ?? []) await assertProject(req, id);
-      const pid = b.projectId ?? filters.projectId?.[0] ?? p.projectId;
-      if (!pid) throw badRequest('projectId (or params.filters.projectId) is required for an OBSERVABILITY report');
+      // owning project (reports.project_id is required): explicit → project filter → project of a filtered entity → the org's first project.
+      // Without a project filter the report covers the whole organization (orgWide) — the owner only decides where it is listed.
+      const orgWide = !filters.projectId?.length && !b.projectId;
+      let pid = b.projectId ?? filters.projectId?.[0] ?? p.projectId ?? null;
+      if (!pid) {
+        const ent = await one(
+          `SELECT pid FROM (
+             SELECT project_id AS pid, 1 AS o FROM environments WHERE id = ANY($2::uuid[])
+             UNION ALL SELECT project_id, 2 FROM applications WHERE id = ANY($3::uuid[])
+             UNION ALL SELECT project_id, 3 FROM test_runs WHERE id = ANY($4::uuid[])
+             UNION ALL SELECT project_id, 4 FROM servers WHERE id = ANY($5::uuid[])
+             UNION ALL SELECT project_id, 5 FROM services WHERE id = ANY($6::uuid[])
+             UNION ALL SELECT id, 9 FROM projects WHERE archived_at IS NULL) x
+           JOIN projects pr ON pr.id = x.pid WHERE pr.organization_id = $1 ORDER BY x.o, pr.created_at LIMIT 1`,
+          [p.orgId, filters.environmentId ?? [], filters.applicationId ?? [], filters.runId ?? [], filters.hostId ?? [], [...(filters.serviceId ?? []), ...(filters.databaseId ?? [])]]);
+        pid = ent?.pid ?? null;
+      }
+      if (!pid) throw badRequest('No project found in your organization to own the report');
       projectId = (await assertProject(req, pid)).id;
-      Object.assign(params, { from: win.from.toISOString(), to: win.to.toISOString(), filters, ...(metrics ? { metrics } : {}) });
+      Object.assign(params, { from: win.from.toISOString(), to: win.to.toISOString(), filters, ...(metrics ? { metrics } : {}), ...(orgWide && !p.projectId ? { orgWide: true } : {}) });
       const fmt = (d: Date) => d.toISOString().slice(0, 16).replace('T', ' ');
       title = b.title ?? b.params?.title ?? `${TYPE_LABEL.OBSERVABILITY} — ${fmt(win.from)} to ${fmt(win.to)} UTC`;
     } else {

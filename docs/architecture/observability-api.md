@@ -118,7 +118,11 @@ Rows also carry `hostId`/`host` when known, and `truncated`. `?format=csv` retur
 
 `POST /reports` accepts `type: "OBSERVABILITY"` with
 `params: { from, to, filters: {…same keys as query filters, string (comma list) or string[]…}, metrics: ["host.cpu_pct", …], title? }`
-(`projectId` top-level or `filters.projectId[0]` is the owning project; with no `filters.projectId` the
-report covers the owning project; `metrics` optional = all with data). Includes a "Load generators"
+`projectId` is **optional**. Scope: with `filters.projectId` (or top-level `projectId`) the report covers
+those project(s); with neither it covers the **whole organization** (`params.orgWide: true`, cover shows
+"Scope: Whole organization"). API keys bound to a project are always restricted to it. The owning project
+(where the report is listed; `reports.project_id` is required) = `projectId` → `filters.projectId[0]` →
+project of a filtered environment/application/run/host/service → the organization's first project.
+`metrics` optional = all with data. Includes a "Load generators"
 table when hosts with role `loadgen` reported in the window.
 and produces the usual formats (pdf, html, xlsx, csv, json) via the existing report pipeline.

@@ -76,7 +76,7 @@ Each process runs one scheduler, and at most three schedules run at the same tim
               "metrics": ["host.cpu_pct", "db.query_latency_ms"], "title": "Night incident" } }
 ```
 
-`metrics` is optional; by default all metrics with data are included. When no project filter is given, the report covers the report's project. The report is available as PDF, HTML, XLSX, CSV and JSON and contains:
+`projectId` and `metrics` are both optional. By default, all metrics with data are included. Without a project (neither `projectId` nor `filters.projectId`), the report covers the whole organization, and the cover page says so. It is then listed under the project of a filtered entity, or else under the organization's first project. An API key that is bound to a project always gets a report for that project only. The report is available as PDF, HTML, XLSX, CSV and JSON and contains:
 
 - **Cover**: the window to the minute (UTC), duration, timezone, bucket size, every applied filter, and entity counts.
 - **Executive summary**: the highest CPU, memory and DB latency, plus pod restarts, each with the exact UTC time of its peak; key figures; and a hot-spot table (peak per metric with its time, window average and P95).
